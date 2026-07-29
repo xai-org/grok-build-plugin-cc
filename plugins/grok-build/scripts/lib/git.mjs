@@ -195,6 +195,31 @@ function formatSection(title, body) {
 
 function formatUntrackedFile(cwd, relativePath) {
   const absolutePath = path.join(cwd, relativePath);
+
+  let lstat;
+  try {
+    lstat = fs.lstatSync(absolutePath);
+  } catch {
+    return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
+  }
+  if (lstat.isSymbolicLink()) {
+    // review/critique are documented as read-only and repo-scoped: an untracked
+    // symlink whose target lies outside the repo must not have that target's
+    // contents read into the prompt (e.g. `leak.txt -> ~/.aws/credentials`).
+    // Mirrors the realpath + containment check in claude-session-transfer.mjs.
+    let real;
+    try {
+      real = fs.realpathSync(absolutePath);
+    } catch {
+      return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
+    }
+    const repoRoot = fs.realpathSync(cwd);
+    const rel = path.relative(repoRoot, real);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      return `### ${relativePath}\n(skipped: symlink escapes repository)`;
+    }
+  }
+
   let stat;
   try {
     stat = fs.statSync(absolutePath);
