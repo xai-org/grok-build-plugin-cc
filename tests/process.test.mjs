@@ -130,3 +130,50 @@ test("runCommand preserves explicit zero status without a signal", () => {
   assert.equal(result.status, 0);
   assert.equal(result.signal, null);
 });
+
+test("runCommand honors an explicit shell override", () => {
+  let captured = null;
+
+  runCommand("git", ["status"], {
+    shell: false,
+    spawnSyncImpl(command, args, options) {
+      captured = { command, args, options };
+      return {
+        status: 0,
+        signal: null,
+        stdout: "",
+        stderr: "",
+        error: null
+      };
+    }
+  });
+
+  assert.equal(captured.command, "git");
+  assert.deepEqual(captured.args, ["status"]);
+  assert.equal(captured.options.shell, false);
+});
+
+test("runCommand keeps metacharacter args discrete when shell is disabled", () => {
+  let captured = null;
+  const maliciousRef = "main&probe.cmd";
+
+  runCommand("git", ["merge-base", "HEAD", maliciousRef], {
+    shell: false,
+    spawnSyncImpl(command, args, options) {
+      captured = { command, args, options };
+      return {
+        status: 0,
+        signal: null,
+        stdout: "abc123\n",
+        stderr: "",
+        error: null
+      };
+    }
+  });
+
+  assert.equal(captured.command, "git");
+  assert.deepEqual(captured.args, ["merge-base", "HEAD", maliciousRef]);
+  assert.equal(captured.options.shell, false);
+  assert.equal(captured.args[2], maliciousRef);
+  assert.ok(!captured.args.some((arg) => arg === "probe.cmd"));
+});
