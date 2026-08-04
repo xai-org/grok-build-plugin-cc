@@ -10,7 +10,27 @@ This repository is a Claude Code marketplace plugin that shells out to the real 
 - Grok Build CLI (`grok`) on `PATH`, or set `GROK_BINARY`
 - A logged-in Grok CLI session (`grok models` succeeds)
 
-## Local install
+## Install
+
+Add the marketplace in Claude Code:
+
+```bash
+/plugin marketplace add xai-org/grok-build-plugin-cc
+```
+
+Install the plugin:
+
+```bash
+/plugin install grok-build@xai-grok-build
+```
+
+Reload plugins:
+
+```bash
+/reload-plugins
+```
+
+### Local install (from a clone)
 
 From this repository root (path must be absolute):
 
