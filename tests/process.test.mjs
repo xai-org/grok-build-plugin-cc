@@ -130,3 +130,27 @@ test("runCommand preserves explicit zero status without a signal", () => {
   assert.equal(result.status, 0);
   assert.equal(result.signal, null);
 });
+
+test("runCommand never enables a shell and keeps metacharacter args discrete", () => {
+  let captured = null;
+  const maliciousRef = "main&probe.cmd";
+
+  runCommand("git", ["merge-base", "HEAD", maliciousRef], {
+    spawnSyncImpl(command, args, options) {
+      captured = { command, args, options };
+      return {
+        status: 0,
+        signal: null,
+        stdout: "abc123\n",
+        stderr: "",
+        error: null
+      };
+    }
+  });
+
+  assert.equal(captured.command, "git");
+  assert.deepEqual(captured.args, ["merge-base", "HEAD", maliciousRef]);
+  assert.equal(captured.options.shell, false);
+  assert.equal(captured.args[2], maliciousRef);
+  assert.ok(!captured.args.some((arg) => arg === "probe.cmd"));
+});
