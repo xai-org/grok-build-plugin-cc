@@ -12,11 +12,9 @@ function sleepMs(ms) {
 
 export function runCommand(command, args = [], options = {}) {
   const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
-  // Never enable a shell when passing a discrete args array. On Windows,
-  // shell:true concatenates argv without escaping (Node DEP0190), so a
-  // repository-controlled ref such as `main&probe.cmd` becomes a second
-  // host command. Fixed binaries (git, grok, taskkill) must receive args
-  // as an argv array on every platform.
+  // Windows may need a shell to resolve .cmd shims (e.g. tool CLIs). Callers
+  // that pass repository-derived argv (especially git refs) must force
+  // shell: false — see git.mjs — so shell metacharacters are not expanded.
   const result = spawnSyncImpl(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -24,7 +22,7 @@ export function runCommand(command, args = [], options = {}) {
     input: options.input,
     maxBuffer: options.maxBuffer,
     stdio: options.stdio ?? "pipe",
-    shell: false,
+    shell: options.shell ?? (process.platform === "win32" ? (process.env.SHELL || true) : false),
     windowsHide: true
   });
 
