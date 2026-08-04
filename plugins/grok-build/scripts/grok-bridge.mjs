@@ -328,7 +328,10 @@ async function executeReviewRun(request) {
   const result = await runHeadlessAgent(context.repoRoot, {
     prompt,
     agent: "explore",
-    permissionMode: "plan",
+    // Headless runs have no user to click Approve, so "plan" mode with no
+    // approver can hang or fail on any tool call. `sandbox: "read-only"` is
+    // the actual safety boundary here, so auto-approving within it is safe.
+    alwaysApprove: true,
     sandbox: "read-only",
     model: request.model,
     effort: request.effort,
@@ -444,8 +447,11 @@ async function executeTaskRun(request) {
     resumeSessionId,
     model: request.model,
     effort: request.effort,
-    alwaysApprove: write,
-    permissionMode: write ? undefined : "plan",
+    // Headless runs have no user to click Approve, so a read-only run using
+    // "plan" mode with no approver can hang or fail on any tool call.
+    // `sandbox: "read-only"` is the actual safety boundary, so auto-approve
+    // is safe in both the write and read-only cases here.
+    alwaysApprove: true,
     sandbox: write ? undefined : "read-only",
     outputFormat: "plain",
     onProgress: request.onProgress
