@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -12,6 +13,25 @@ import {
   writeJobFile
 } from "../plugins/grok-build/scripts/lib/state.mjs";
 import { resolveJobKillTargets } from "../plugins/grok-build/scripts/lib/tracked-jobs.mjs";
+import { handleCancel } from "../plugins/grok-build/scripts/grok-bridge.mjs";
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 20 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return predicate();
+}
 
 function withPluginData(fn) {
   const previous = process.env.CLAUDE_PLUGIN_DATA;
@@ -194,6 +214,132 @@ test("stop claim-before-kill ordering: claim cancelled then kill targets from pr
     assert.equal(late.reason, "cancelled-wins");
   });
 });
+
+// Regression tests for #3: `stop` must not signal a job's pre-claim pids
+// unless it actually won the cancel claim.
+//
+// The bug report's exact TOCTOU window -- the target job finishing on its
+// own between handleCancel's initial (unlocked) resolveCancelableJob read
+// and its claimJobTerminal call -- happens across two real OS processes and
+// can't be landed deterministically from a single-process test.
+//
+// listJobs() (which resolveCancelableJob uses to find "active" jobs) reads
+// only the aggregate state index, while claimJobTerminal() prefers the
+// per-job file over the index (readJobFileIfPresent(...) ?? indexJob). A job
+// whose file has already been updated to a terminal status but whose index
+// entry hasn't caught up yet is exactly the state two racing writers would
+// leave behind mid-update -- and it's fully deterministic to construct
+// directly, without timing. These call the real, now-exported handleCancel()
+// against a real child process, so the actual kill call (or its absence) is
+// what's observed, not a re-implementation of its branching.
+test("stop does not signal a job's process when the cancel claim is lost", async () => {
+  await withPluginDataAsync(async () => {
+    const workspace = makeTempDir();
+    const jobId = "job-claim-lost-no-kill";
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      stdio: "ignore",
+      detached: true
+    });
+    child.unref();
+    try {
+      await waitFor(() => isAlive(child.pid));
+
+      const running = {
+        id: jobId,
+        status: "running",
+        phase: "running",
+        title: "Claim lost",
+        bridgePid: child.pid,
+        agentPid: child.pid,
+        pid: child.pid
+      };
+      // Index says "running" (what resolveCancelableJob sees)...
+      upsertJob(workspace, running);
+      // ...but the file already moved to "completed" (what claimJobTerminal
+      // prefers), simulating the job finishing just ahead of `stop`.
+      writeJobFile(workspace, jobId, { ...running, status: "completed", phase: "completed" });
+
+      await handleCancel([jobId, "--cwd", workspace, "--json"]);
+
+      const stored = readJobFile(resolveJobFile(workspace, jobId));
+      assert.equal(stored.status, "completed");
+      // terminateProcessTree has an internal ~200ms SIGTERM grace period
+      // before it would escalate to SIGKILL, so an immediate isAlive() check
+      // would pass whether or not a kill was even attempted. Wait past that
+      // window to actually observe the outcome.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.equal(isAlive(child.pid), true);
+    } finally {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {
+          // already dead
+        }
+      }
+    }
+  });
+});
+
+test("stop does signal a job's process when the cancel claim is won", async () => {
+  await withPluginDataAsync(async () => {
+    const workspace = makeTempDir();
+    const jobId = "job-claim-won-kill";
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      stdio: "ignore",
+      detached: true
+    });
+    child.unref();
+    try {
+      await waitFor(() => isAlive(child.pid));
+
+      const running = {
+        id: jobId,
+        status: "running",
+        phase: "running",
+        title: "Claim won",
+        bridgePid: child.pid,
+        agentPid: child.pid,
+        pid: child.pid
+      };
+      writeJobFile(workspace, jobId, running);
+      upsertJob(workspace, running);
+
+      await handleCancel([jobId, "--cwd", workspace, "--json"]);
+
+      const stored = readJobFile(resolveJobFile(workspace, jobId));
+      assert.equal(stored.status, "cancelled");
+      const died = await waitFor(() => !isAlive(child.pid));
+      assert.equal(died, true);
+    } finally {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {
+          // already dead
+        }
+      }
+    }
+  });
+});
+
+function withPluginDataAsync(fn) {
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = makeTempDir();
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      if (previous == null) {
+        delete process.env.CLAUDE_PLUGIN_DATA;
+      } else {
+        process.env.CLAUDE_PLUGIN_DATA = previous;
+      }
+    });
+}
 
 test("patchJobIfActive does not resurrect terminal jobs when patching worker pid", () => {
   withPluginData(() => {

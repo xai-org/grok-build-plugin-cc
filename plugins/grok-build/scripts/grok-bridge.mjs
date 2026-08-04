@@ -992,15 +992,19 @@ async function handleCancel(argv) {
     logFile: existing.logFile ?? job.logFile ?? null
   });
 
-  const killResult = terminateJobProcessTrees(preClaimRecord);
-
   if (!claim.claimed && claim.status && claim.status !== "cancelled") {
+    // The job already reached a terminal state before this claim landed, so
+    // the kill must not run at all: preClaimRecord's pids no longer belong to
+    // this job, and signaling them risks hitting an unrelated process that
+    // has since reused the pid. This is the claim-before-kill guarantee the
+    // README describes -- the kill is gated on winning the claim, not just
+    // ordered after attempting it.
     const payload = {
       jobId: job.id,
       status: claim.status,
       title: claim.job?.title ?? job.title,
-      killAttempted: killResult.attempted,
-      killDelivered: killResult.delivered,
+      killAttempted: false,
+      killDelivered: false,
       alreadyTerminal: true,
       claimOrder: "claim-before-kill",
       killTargets
@@ -1012,6 +1016,8 @@ async function handleCancel(argv) {
     );
     return;
   }
+
+  const killResult = terminateJobProcessTrees(preClaimRecord);
 
   appendLogLine(
     existing.logFile ?? job.logFile,
@@ -1105,4 +1111,4 @@ if (isMain) {
   });
 }
 
-export { main, readStoredJobWithRetry };
+export { handleCancel, main, readStoredJobWithRetry };
