@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -70,6 +71,28 @@ test("runHeadlessAgent captures stdout and session id from fake grok", async () 
   assert.ok(result.args.includes("-p"));
   assert.ok(result.args.includes("--permission-mode"));
   assert.ok(result.args.includes("plan"));
+});
+
+test("runHeadlessAgent forwards a prompt file path instead of inlining the prompt", async () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir);
+  const env = buildEnv(binDir);
+  const cwd = makeTempDir();
+  const promptFile = path.join(cwd, "prompt.txt");
+  fs.writeFileSync(promptFile, "prompt loaded from a file\n");
+
+  const result = await runHeadlessAgent(cwd, {
+    prompt: "prompt loaded from a file\n",
+    promptFile,
+    env,
+    sandbox: "read-only"
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.finalMessage, /Handled the requested task/);
+  assert.ok(result.args.includes("--prompt-file"));
+  assert.equal(result.args[result.args.indexOf("--prompt-file") + 1], promptFile);
+  assert.ok(!result.args.includes("-p"));
 });
 
 test("runImport parses session id from fake grok json output", () => {
@@ -145,6 +168,7 @@ test("live grok --help advertises headless flags when grok is on PATH", () => {
   const text = `${help.stdout}\n${help.stderr}`;
   for (const flag of [
     "-p",
+    "--prompt-file",
     "--single",
     "-r",
     "--resume",

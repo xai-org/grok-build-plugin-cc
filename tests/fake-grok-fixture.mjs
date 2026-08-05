@@ -77,14 +77,20 @@ if (argv[0] === "import") {
 
 // Headless print / prompt modes
 const printIndex = argv.indexOf("-p");
-const isPrint = printIndex !== -1 || hasFlag("--print");
+const promptFilePath = flagValue("--prompt-file");
+const isPrint = printIndex !== -1 || promptFilePath !== null || hasFlag("--print");
 if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag("--continue")) {
   if (scenario === "fail-print") {
     process.stderr.write("fake grok failed the print run\\n");
     process.exit(2);
   }
 
-  const prompt = printIndex !== -1 ? (argv[printIndex + 1] ?? "") : "";
+  const prompt =
+    printIndex !== -1
+      ? (argv[printIndex + 1] ?? "")
+      : promptFilePath
+        ? fs.readFileSync(promptFilePath, "utf8")
+        : "";
   const wantsJson = hasFlag("--json-schema") || flagValue("--output-format") === "json";
 
   if (wantsJson || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {

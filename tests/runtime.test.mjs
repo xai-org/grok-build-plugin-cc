@@ -238,6 +238,44 @@ test("run delegates through fake grok and stores a finished job", () => {
   }
 });
 
+test("run --prompt-file forwards the path to grok instead of inlining the prompt", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  const fakeGrokLog = path.join(pluginDataDir, "fake-grok.log");
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+
+  // Large enough that inlining it into argv would exceed the Windows
+  // CreateProcess command-line limit (32,767 chars) and fail the spawn.
+  const promptFile = path.join(repo, "prompt.txt");
+  fs.writeFileSync(promptFile, `summarize this repository\n${"x".repeat(40000)}\n`);
+
+  const result = run("node", [SCRIPT, "run", "--prompt-file", promptFile], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Handled the requested task/);
+
+  const lines = fs
+    .readFileSync(fakeGrokLog, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const promptRun = [...lines].reverse().find((entry) => entry.argv?.includes("--prompt-file"));
+  assert.ok(promptRun, "expected a headless grok --prompt-file invocation");
+  const argv = promptRun.argv;
+  assert.equal(argv[argv.indexOf("--prompt-file") + 1], promptFile);
+  assert.ok(!argv.includes("-p"));
+  assert.ok(
+    argv.every((arg) => !arg.includes("xxxx")),
+    "prompt contents must not appear in argv"
+  );
+});
+
 test("runs and show surface the latest finished run", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

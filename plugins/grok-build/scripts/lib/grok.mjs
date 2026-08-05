@@ -163,7 +163,13 @@ function buildHeadlessArgs(prompt, options = {}) {
     args.push("--session-id", options.sessionId);
   }
 
-  args.push("-p", prompt);
+  if (options.promptFile) {
+    // Keep file-based prompts out of argv: inlining them trips the Windows
+    // 32,767-char command-line limit and exposes the prompt in process listings.
+    args.push("--prompt-file", options.promptFile);
+  } else {
+    args.push("-p", prompt);
+  }
 
   if (options.cwd) {
     args.push("--cwd", options.cwd);

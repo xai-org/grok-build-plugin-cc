@@ -444,6 +444,7 @@ async function executeTaskRun(request) {
 
   const result = await runHeadlessAgent(workspaceRoot, {
     prompt,
+    promptFile: request.promptFile ?? null,
     resumeSessionId,
     model: request.model,
     effort: request.effort,
@@ -547,12 +548,13 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, promptFile, write, resumeLast, jobId }) {
   return {
     cwd,
     model,
     effort,
     prompt,
+    promptFile,
     write,
     resumeLast,
     jobId
@@ -590,11 +592,14 @@ async function executeTransfer(cwd, options = {}) {
 
 function readTaskPrompt(cwd, options, positionals) {
   if (options["prompt-file"]) {
-    return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
+    const promptFile = path.resolve(cwd, options["prompt-file"]);
+    // The contents are only used for validation and job metadata; the grok CLI
+    // reads the file itself via --prompt-file so the prompt never enters argv.
+    return { prompt: fs.readFileSync(promptFile, "utf8"), promptFile };
   }
 
   const positionalPrompt = positionals.join(" ");
-  return positionalPrompt || readStdinIfPiped();
+  return { prompt: positionalPrompt || readStdinIfPiped(), promptFile: null };
 }
 
 function requireTaskRequest(prompt, resumeLast) {
@@ -746,7 +751,7 @@ async function handleTask(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = options.model ? String(options.model).trim() : null;
   const effort = normalizeReasoningEffort(options.effort);
-  const prompt = readTaskPrompt(cwd, options, positionals);
+  const { prompt, promptFile } = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const fresh = Boolean(options.fresh);
@@ -771,6 +776,7 @@ async function handleTask(argv) {
         model,
         effort,
         prompt,
+        promptFile,
         write,
         resumeLast,
         jobId: job.id
@@ -790,6 +796,7 @@ async function handleTask(argv) {
         model,
         effort,
         prompt,
+        promptFile,
         write,
         resumeLast,
         jobId: job.id,
