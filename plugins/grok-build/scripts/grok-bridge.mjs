@@ -33,6 +33,7 @@ import {
   sortJobsNewestFirst
 } from "./lib/job-control.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { assessWorkEvidence, renderWorkEvidenceBanner } from "./lib/work-evidence.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   claimJobTerminal,
@@ -442,6 +443,7 @@ async function executeTaskRun(request) {
   const prompt = String(request.prompt ?? "").trim() || (resumeSessionId ? DEFAULT_CONTINUE_PROMPT : "");
   const write = Boolean(request.write);
 
+  const startedAtMs = Date.now();
   const result = await runHeadlessAgent(workspaceRoot, {
     prompt,
     resumeSessionId,
@@ -453,27 +455,47 @@ async function executeTaskRun(request) {
     // is safe in both the write and read-only cases here.
     alwaysApprove: true,
     sandbox: write ? undefined : "read-only",
-    outputFormat: "plain",
+    // fleet#254: "plain" discards num_turns/stopReason/usage, leaving the bridge with nothing
+    // but the process exit code to judge completion by. Ask for the envelope instead.
+    outputFormat: "json",
     onProgress: request.onProgress
   });
+  const durationMs = Date.now() - startedAtMs;
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.status === 0 ? "" : result.stderr || "";
-  const rendered = renderTaskResult(
-    {
-      rawOutput,
-      failureMessage
-    },
-    {
-      title: taskMetadata.title,
-      jobId: request.jobId ?? null,
-      write
-    }
-  );
+
+  // fleet#254: a run that emitted a plan and stopped must not be reported as completed.
+  const workVerdict = assessWorkEvidence({
+    telemetry: result.telemetry,
+    text: rawOutput,
+    durationMs,
+    requireWork: request.requireWork !== false,
+    strict: Boolean(request.strictWorkEvidence)
+  });
+
+  const rendered =
+    renderTaskResult(
+      {
+        rawOutput,
+        failureMessage
+      },
+      {
+        title: taskMetadata.title,
+        jobId: request.jobId ?? null,
+        write
+      }
+    ) + renderWorkEvidenceBanner(workVerdict);
   const payload = {
     status: result.status,
     threadId: result.threadId,
-    rawOutput
+    rawOutput,
+    workEvidence: workVerdict.evidence,
+    workVerdict: {
+      noWork: workVerdict.noWork,
+      unverified: workVerdict.unverified,
+      reasons: workVerdict.reasons
+    }
   };
 
   return {
@@ -482,7 +504,10 @@ async function executeTaskRun(request) {
     turnId: null,
     payload,
     rendered,
-    summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
+    workVerdict,
+    summary: workVerdict.noWork
+      ? `EMPTY RUN (no work performed): ${firstMeaningfulLine(rawOutput, taskMetadata.title)}`
+      : firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
     jobTitle: taskMetadata.title,
     jobClass: "task",
     write
@@ -547,7 +572,17 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({
+  cwd,
+  model,
+  effort,
+  prompt,
+  write,
+  resumeLast,
+  jobId,
+  requireWork = true,
+  strictWorkEvidence = false
+}) {
   return {
     cwd,
     model,
@@ -555,7 +590,10 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
-    jobId
+    jobId,
+    // fleet#254: persisted into the queued request so background runs enforce the same gate.
+    requireWork,
+    strictWorkEvidence
   };
 }
 
@@ -612,6 +650,10 @@ async function runForegroundCommand(job, runner, options = {}) {
   outputResult(options.json ? execution.payload : execution.rendered, options.json);
   if (execution.exitStatus !== 0) {
     process.exitCode = execution.exitStatus;
+  } else if (execution.workVerdict?.noWork) {
+    // fleet#254: an empty run must be visible to the shell that invoked the bridge, not just
+    // in the job record. The delegate subagent only sees this exit code and stdout.
+    process.exitCode = 3;
   }
   return execution;
 }
@@ -736,7 +778,17 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: [
+      "json",
+      "write",
+      "resume-last",
+      "resume",
+      "fresh",
+      "background",
+      // fleet#254 work-evidence gate controls.
+      "allow-no-work",
+      "strict-work-evidence"
+    ],
     aliasMap: {
       m: "model"
     }
@@ -754,6 +806,8 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
+  const requireWork = !options["allow-no-work"];
+  const strictWorkEvidence = Boolean(options["strict-work-evidence"]);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -773,7 +827,9 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
-        jobId: job.id
+        jobId: job.id,
+        requireWork,
+        strictWorkEvidence
       })
     };
     const { payload } = enqueueBackgroundJob(cwd, job, request);
@@ -793,6 +849,8 @@ async function handleTask(argv) {
         write,
         resumeLast,
         jobId: job.id,
+        requireWork,
+        strictWorkEvidence,
         onProgress: progress
       }),
     { json: options.json }
