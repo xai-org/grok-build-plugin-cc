@@ -85,7 +85,28 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   }
 
   const prompt = printIndex !== -1 ? (argv[printIndex + 1] ?? "") : "";
-  const wantsJson = hasFlag("--json-schema") || flagValue("--output-format") === "json";
+  const wantsSchema = hasFlag("--json-schema");
+  const wantsEnvelope = !wantsSchema && flagValue("--output-format") === "json";
+  const wantsJson = wantsSchema || flagValue("--output-format") === "json";
+
+  // fleet#254: the delegate path now asks for --output-format json, so the fake must emit the
+  // real CLI's envelope (text + num_turns + usage). The "empty-run" scenario reproduces the
+  // defect: a single tool-free turn that still exits 0.
+  if (wantsEnvelope) {
+    const emptyRun = scenario === "empty-run";
+    const envelope = {
+      text: emptyRun
+        ? "I'll investigate the repository and report back with findings."
+        : "Handled the requested task.",
+      stopReason: "end_turn",
+      sessionId: "11111111-2222-4333-8444-555555555555",
+      usage: { input_tokens: 100, output_tokens: emptyRun ? 30 : 200, total_tokens: 300 },
+      num_turns: emptyRun ? 1 : 3,
+      modelUsage: { "fake-model": { modelCalls: emptyRun ? 1 : 3 } }
+    };
+    process.stdout.write(JSON.stringify(envelope) + "\\n");
+    process.exit(0);
+  }
 
   if (wantsJson || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
     const payload = {
