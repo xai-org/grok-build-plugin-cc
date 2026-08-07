@@ -330,7 +330,14 @@ async function executeReviewRun(request) {
     agent: "explore",
     // Headless runs have no user to click Approve, so "plan" mode with no
     // approver can hang or fail on any tool call. `sandbox: "read-only"` is
-    // the actual safety boundary here, so auto-approving within it is safe.
+    // what makes auto-approving acceptable here.
+    //
+    // Platform caveat, because this is the line someone reads before deciding
+    // what is safe to depend on: enforcement exists on Linux (Landlock) and
+    // macOS (Seatbelt) only. The sandbox documentation names no Windows
+    // mechanism, and xai-grok-sandbox's apply() takes a no-op branch when not
+    // built for unix. buildHeadlessArgs passes no tool restrictions, so on
+    // Windows this call runs auto-approved with nothing constraining it.
     alwaysApprove: true,
     sandbox: "read-only",
     model: request.model,
@@ -449,8 +456,15 @@ async function executeTaskRun(request) {
     effort: request.effort,
     // Headless runs have no user to click Approve, so a read-only run using
     // "plan" mode with no approver can hang or fail on any tool call.
-    // `sandbox: "read-only"` is the actual safety boundary, so auto-approve
-    // is safe in both the write and read-only cases here.
+    // `sandbox: "read-only"` is what makes auto-approve acceptable in the
+    // read-only case; in the write case the user has asked for write access.
+    //
+    // Platform caveat, same as the review path above: sandbox enforcement
+    // exists on Linux (Landlock) and macOS (Seatbelt) only. The sandbox
+    // documentation names no Windows mechanism, and xai-grok-sandbox's apply()
+    // takes a no-op branch when not built for unix. buildHeadlessArgs passes no
+    // tool restrictions, so on Windows a read-only run is auto-approved with
+    // nothing constraining it.
     alwaysApprove: true,
     sandbox: write ? undefined : "read-only",
     outputFormat: "plain",
