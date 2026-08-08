@@ -23,11 +23,47 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function isLineForVar(name, line) {
+  const trimmed = line.trim();
+  return trimmed.startsWith(`export ${name}=`) || trimmed.startsWith(`${name}=`);
+}
+
 function appendEnvVar(name, value) {
-  if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
+  const file = process.env.CLAUDE_ENV_FILE;
+  if (!file || value == null || value === "") {
     return;
   }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
+
+  // Rewrite this variable rather than append. SessionStart also fires on resume
+  // and compaction; Claude Code inlines CLAUDE_ENV_FILE into every bash -c, and
+  // on Windows MSYS2 silently truncates that argument past 8186 characters.
+  const line = `export ${name}=${shellEscape(value)}\n`;
+
+  let existing = "";
+  try {
+    existing = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    // Only a missing file is empty. Any other read error must abort: the write
+    // below replaces the whole file, and handleSessionStart runs three of these
+    // back to back.
+    if (error?.code !== "ENOENT") {
+      return;
+    }
+  }
+
+  // Drop the empty split tail so a trailing newline cannot re-grow the file by one
+  // byte per call. Exactly one: it is the artefact this split just created.
+  //
+  // Filtering every blank entry instead would also delete blank lines another hook
+  // wrote, and CLAUDE_ENV_FILE is shared. Reformatting someone else's content on
+  // every session start, resume and compaction is a quieter version of the problem
+  // this function exists to fix.
+  const kept = existing.split(/\r?\n/).filter((entry) => !isLineForVar(name, entry));
+  if (kept.length > 0 && kept[kept.length - 1] === "") {
+    kept.pop();
+  }
+  const next = kept.length > 0 ? `${kept.join("\n")}\n${line}` : line;
+  fs.writeFileSync(file, next, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
