@@ -15,10 +15,11 @@ export function writeExecutable(filePath, source, options = {}) {
   // an extensionless file, so the script stays invisible on PATH and the real
   // binary is found instead. Write a .cmd shim beside it, the way npm ships
   // npm and npm.cmd. Callers must keep spawning the bare name: spawn rejects a
-  // literal .bat/.cmd path unless shell is set (CVE-2024-27980).
+  // literal .bat/.cmd path unless shell is set (CVE-2024-27980). The shim
+  // spells out the script path rather than deriving it from %~dp0, so reading
+  // the shim tells you what it runs without expanding anything.
   if ((options.platform ?? process.platform) === "win32") {
-    const script = path.basename(filePath);
-    fs.writeFileSync(`${filePath}.cmd`, `@echo off\r\nnode "%~dp0${script}" %*\r\n`, { encoding: "utf8" });
+    fs.writeFileSync(`${filePath}.cmd`, `@echo off\r\nnode "${filePath}" %*\r\n`, { encoding: "utf8" });
   }
 }
 

@@ -13,7 +13,7 @@ test("writeExecutable installs a .cmd shim on Windows so PATHEXT can find the sc
   writeExecutable(scriptPath, SOURCE, { platform: "win32" });
 
   assert.equal(fs.readFileSync(scriptPath, "utf8"), SOURCE);
-  assert.equal(fs.readFileSync(`${scriptPath}.cmd`, "utf8"), '@echo off\r\nnode "%~dp0grok" %*\r\n');
+  assert.equal(fs.readFileSync(`${scriptPath}.cmd`, "utf8"), `@echo off\r\nnode "${scriptPath}" %*\r\n`);
 });
 
 test("writeExecutable writes no shim on posix", () => {
