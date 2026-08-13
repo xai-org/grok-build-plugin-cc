@@ -27,7 +27,20 @@ function appendEnvVar(name, value) {
   if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
     return;
   }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
+  const file = process.env.CLAUDE_ENV_FILE;
+  const line = `export ${name}=${shellEscape(value)}\n`;
+  let existing = "";
+  try {
+    existing = fs.readFileSync(file, "utf8");
+  } catch {
+    existing = "";
+  }
+  // SessionStart fires on resume/compact. Unbounded append blows past the
+  // Windows MSYS bash -c 8186-char cut and silently no-ops Bash (issue #18).
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^export ${escapedName}=.*\\n?`, "m");
+  const next = re.test(existing) ? existing.replace(re, line) : `${existing}${line}`;
+  fs.writeFileSync(file, next, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {

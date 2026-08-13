@@ -68,6 +68,30 @@ test("default branch names with special characters are passed to git literally",
   assert.equal(fs.existsSync(helperOutputPath), false);
 });
 
+test("untracked symlink that escapes the repo is not inlined", (t) => {
+  const cwd = makeTempDir();
+  initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "app.js"), "console.log('ok');\n");
+  run("git", ["add", "app.js"], { cwd });
+  run("git", ["commit", "-m", "init"], { cwd });
+
+  const outside = path.join(makeTempDir(), "secret.txt");
+  fs.writeFileSync(outside, "CANARY-SECRET-OUTSIDE-REPO\n");
+  const link = path.join(cwd, "leak.txt");
+  try {
+    fs.symlinkSync(outside, link);
+  } catch (error) {
+    t.skip(`symlink not permitted: ${error.message}`);
+    return;
+  }
+
+  const target = resolveReviewTarget(cwd, {});
+  const context = collectReviewContext(cwd, target);
+  assert.equal(target.mode, "working-tree");
+  assert.doesNotMatch(context.content, /CANARY-SECRET-OUTSIDE-REPO/);
+  assert.match(context.content, /symlink escapes workspace|skipped: symlink/);
+});
+
 test("resolveReviewTarget honors explicit base overrides", () => {
   const cwd = makeTempDir();
   initGitRepo(cwd);

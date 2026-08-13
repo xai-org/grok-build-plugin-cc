@@ -7,6 +7,7 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+const PLUGIN_ID = "grok-build";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "grok-cc-runs");
 const STATE_FILE_NAME = "state.json";
 const LOCK_FILE_NAME = "state.json.lock";
@@ -60,7 +61,8 @@ export function resolveStateDir(cwd) {
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
   const pluginDataDir = process.env[PLUGIN_DATA_ENV];
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
-  return path.join(stateRoot, `${slug}-${hash}`);
+  // Isolate from sibling plugins that share CLAUDE_PLUGIN_DATA (issue #17).
+  return path.join(stateRoot, PLUGIN_ID, `${slug}-${hash}`);
 }
 
 export function resolveStateFile(cwd) {
@@ -154,6 +156,17 @@ function upsertJobInState(state, jobPatch) {
     ...jobPatch,
     updatedAt: timestamp
   };
+}
+
+/** Kill only if stop owns cancel, or the job is already cancelled. */
+export function cancelClaimAllowsKill(claim) {
+  if (!claim) {
+    return false;
+  }
+  if (claim.claimed) {
+    return true;
+  }
+  return claim.status === "cancelled" || !claim.status;
 }
 
 /** Claim terminal status for job file + index under one lock. cancelled wins. */

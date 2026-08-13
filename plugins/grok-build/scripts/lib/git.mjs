@@ -199,7 +199,32 @@ function formatSection(title, body) {
 }
 
 function formatUntrackedFile(cwd, relativePath) {
-  const absolutePath = path.join(cwd, relativePath);
+  const absolutePath = path.resolve(cwd, relativePath);
+  let lstat;
+  try {
+    lstat = fs.lstatSync(absolutePath);
+  } catch {
+    return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
+  }
+  if (lstat.isSymbolicLink()) {
+    let target;
+    try {
+      target = fs.realpathSync(absolutePath);
+    } catch {
+      return `### ${relativePath}\n(skipped: broken symlink or unreadable file)`;
+    }
+    let root;
+    try {
+      root = fs.realpathSync(cwd);
+    } catch {
+      root = path.resolve(cwd);
+    }
+    const rel = path.relative(root, target);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return `### ${relativePath}\n(skipped: symlink escapes workspace)`;
+    }
+  }
+
   let stat;
   try {
     stat = fs.statSync(absolutePath);

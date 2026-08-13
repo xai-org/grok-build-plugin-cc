@@ -72,19 +72,11 @@ test("runHeadlessAgent captures stdout and session id from fake grok", async () 
   assert.ok(result.args.includes("plan"));
 });
 
-test("runImport parses session id from fake grok json output", () => {
-  const binDir = makeTempDir();
-  installFakeGrok(binDir);
-  const env = buildEnv(binDir);
-  const sourcePath = path.join(makeTempDir(), "sess.jsonl");
-
-  const result = runImport(process.cwd(), {
-    sourcePath,
-    env
-  });
-
-  assert.equal(result.sessionId, "11111111-2222-4333-8444-555555555555");
-  assert.equal(result.resumeCommand, "grok -r 11111111-2222-4333-8444-555555555555");
+test("runImport fails closed because grok import no longer exists", () => {
+  assert.throws(
+    () => runImport(process.cwd(), { sourcePath: "sess.jsonl" }),
+    /no longer supports `grok import`/
+  );
 });
 
 test("parseStructuredOutput extracts fenced JSON", () => {

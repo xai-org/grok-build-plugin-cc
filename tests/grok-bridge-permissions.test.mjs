@@ -65,6 +65,7 @@ test("review passes --always-approve alongside --sandbox read-only", () => {
   assert.ok(argv.includes("--always-approve"), argv.join(" "));
   assert.ok(argv.includes("--sandbox"), argv.join(" "));
   assert.equal(argv[argv.indexOf("--sandbox") + 1], "read-only");
+  assert.ok(argv.includes("--disallowed-tools"), argv.join(" "));
 });
 
 test("run without --write passes --always-approve alongside --sandbox read-only", () => {
@@ -80,6 +81,7 @@ test("run without --write passes --always-approve alongside --sandbox read-only"
   assert.ok(argv.includes("--always-approve"), argv.join(" "));
   assert.ok(argv.includes("--sandbox"), argv.join(" "));
   assert.equal(argv[argv.indexOf("--sandbox") + 1], "read-only");
+  assert.ok(argv.includes("--disallowed-tools"), argv.join(" "));
 });
 
 test("run with --write passes --always-approve without a sandbox flag", () => {
@@ -94,4 +96,5 @@ test("run with --write passes --always-approve without a sandbox flag", () => {
   const argv = lastFakeGrokArgv(fakeGrokLog);
   assert.ok(argv.includes("--always-approve"), argv.join(" "));
   assert.ok(!argv.includes("--sandbox"), argv.join(" "));
+  assert.ok(!argv.includes("--disallowed-tools"), argv.join(" "));
 });

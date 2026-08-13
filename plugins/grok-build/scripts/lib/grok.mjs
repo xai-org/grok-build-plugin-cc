@@ -163,7 +163,11 @@ function buildHeadlessArgs(prompt, options = {}) {
     args.push("--session-id", options.sessionId);
   }
 
-  args.push("-p", prompt);
+  if (options.promptFile) {
+    args.push("--prompt-file", options.promptFile);
+  } else {
+    args.push("-p", prompt);
+  }
 
   if (options.cwd) {
     args.push("--cwd", options.cwd);
@@ -176,6 +180,9 @@ function buildHeadlessArgs(prompt, options = {}) {
   }
   if (options.sandbox) {
     args.push("--sandbox", options.sandbox);
+  }
+  if (options.disallowedTools) {
+    args.push("--disallowed-tools", options.disallowedTools);
   }
   if (options.alwaysApprove) {
     args.push("--always-approve");
@@ -203,7 +210,7 @@ function buildHeadlessArgs(prompt, options = {}) {
 export function runHeadlessAgent(cwd, options = {}) {
   const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
   const prompt = String(options.prompt ?? "").trim() || options.defaultPrompt || "";
-  if (!prompt) {
+  if (!prompt && !options.promptFile) {
     return Promise.reject(new Error("A prompt is required for this Grok run."));
   }
 
@@ -219,15 +226,29 @@ export function runHeadlessAgent(cwd, options = {}) {
 
   const platform = options.platform ?? process.platform;
   const detached = options.detached ?? platform !== "win32";
+  // Prefer `node grok.js` over `cmd /c grok.cmd` so prompt argv is not
+  // re-parsed by cmd.exe (issue #20 / #14).
+  const cmdShim = platform === "win32" && /\.cmd$/i.test(String(binary));
+  const jsSibling = cmdShim ? String(binary).replace(/\.cmd$/i, ".js") : "";
+  const useNodeShim = cmdShim && jsSibling && fs.existsSync(jsSibling);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, {
-      cwd,
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached,
-      windowsHide: true
-    });
+    const child = useNodeShim
+      ? spawn(process.execPath, [jsSibling, ...args], {
+          cwd,
+          env: options.env ?? process.env,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached,
+          windowsHide: true
+        })
+      : spawn(binary, args, {
+          cwd,
+          env: options.env ?? process.env,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached,
+          shell: cmdShim,
+          windowsHide: true
+        });
 
     const agentPid = child.pid ?? null;
     emitProgress(options.onProgress, `Running grok (${binary}).`, "starting", {
@@ -276,75 +297,13 @@ export function runHeadlessAgent(cwd, options = {}) {
   });
 }
 
-export function runImport(cwd, options = {}) {
-  const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  const args = ["import"];
-  if (options.list) {
-    args.push("--list");
-  }
-  if (options.sourcePath) {
-    args.push(options.sourcePath);
-  }
-  if (options.json !== false) {
-    args.push("--json");
-  }
-
-  emitProgress(options.onProgress, "Importing Claude session into Grok.", "transferring");
-
-  const result = runGrok(args, {
-    cwd,
-    env: options.env,
-    binary
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || `exit ${result.status}`).trim();
-    throw new Error(detail || "grok import failed");
-  }
-
-  const raw = (result.stdout || "").trim();
-  let parsed = null;
-  let sessionId = null;
-
-  const lines = raw.split(/\r?\n/).filter(Boolean);
-  for (const line of lines) {
-    try {
-      const obj = JSON.parse(line);
-      parsed = obj;
-      sessionId =
-        obj.sessionId ??
-        obj.session_id ??
-        obj.id ??
-        obj.importedSessionId ??
-        obj.threadId ??
-        sessionId;
-    } catch {
-    }
-  }
-
-  if (!sessionId) {
-    const match = raw.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i);
-    if (match) {
-      sessionId = match[0];
-    }
-  }
-
-  emitProgress(options.onProgress, sessionId ? `Imported session ${sessionId}.` : "Import completed.", "completed", {
-    threadId: sessionId
-  });
-
-  return {
-    status: 0,
-    stdout: raw,
-    stderr: result.stderr,
-    sessionId,
-    threadId: sessionId,
-    parsed,
-    resumeCommand: sessionId ? `grok -r ${sessionId}` : null
-  };
+export function runImport(_cwd, _options = {}) {
+  // grok import was removed from the CLI (gone by 0.2.118). Calling it
+  // with json:false launches an interactive session with "import" as the
+  // prompt and burns a metered turn (issue #21).
+  throw new Error(
+    "Grok CLI no longer supports `grok import`. /grok-build:import is disabled. Use Grok Build's resume-claude skill for a handoff summary, or start a fresh session."
+  );
 }
 
 export function parseStructuredOutput(rawOutput, fallback = {}) {

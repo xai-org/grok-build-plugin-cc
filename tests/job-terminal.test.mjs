@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
 import {
+  cancelClaimAllowsKill,
   claimJobTerminal,
   patchJobIfActive,
   readJobFile,
@@ -150,6 +151,14 @@ test("resolveJobKillTargets returns distinct agent and bridge pids, including le
   );
   assert.deepEqual(resolveJobKillTargets({ pid: 9 }), [9]);
   assert.deepEqual(resolveJobKillTargets({}), []);
+});
+
+test("cancelClaimAllowsKill is false when stop loses to completed", () => {
+  assert.equal(cancelClaimAllowsKill({ claimed: true, status: "cancelled" }), true);
+  assert.equal(cancelClaimAllowsKill({ claimed: false, status: "cancelled" }), true);
+  assert.equal(cancelClaimAllowsKill({ claimed: false, status: "completed" }), false);
+  assert.equal(cancelClaimAllowsKill({ claimed: false, status: "failed" }), false);
+  assert.equal(cancelClaimAllowsKill({ claimed: false, status: null }), true);
 });
 
 test("stop claim-before-kill ordering: claim cancelled then kill targets from pre-claim pids", () => {

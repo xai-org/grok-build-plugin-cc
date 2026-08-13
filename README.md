@@ -115,14 +115,7 @@ Write policy layering:
 
 ### `/grok-build:import`
 
-Import the current Claude transcript into Grok:
-
-```text
-/grok-build:import
-/grok-build:import --source ~/.claude/projects/.../session.jsonl
-```
-
-Uses `grok import` and prints a resume hint: `grok -r <id>`.
+Disabled. The Grok CLI no longer has an `import` subcommand (removed before 0.2.118). This command now fails closed instead of launching an interactive `grok` with `import` as the prompt. Use Grok Build's bundled `resume-claude` skill for a handoff summary.
 
 ### `/grok-build:runs`
 

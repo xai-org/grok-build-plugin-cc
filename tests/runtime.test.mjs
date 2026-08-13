@@ -440,7 +440,7 @@ function readStoredJobFromDisk(workspaceRoot, jobId) {
   return JSON.parse(fs.readFileSync(jobFile, "utf8"));
 }
 
-test("import uses grok import and prints resume hint", () => {
+test("import fails closed because grok import is gone", () => {
   const home = makeTempDir();
   const projects = path.join(home, ".claude", "projects", "demo");
   fs.mkdirSync(projects, { recursive: true });
@@ -461,10 +461,8 @@ test("import uses grok import and prints resume hint", () => {
     })
   });
 
-  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.threadId, "11111111-2222-4333-8444-555555555555");
-  assert.equal(payload.resumeCommand, "grok -r 11111111-2222-4333-8444-555555555555");
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}\n${result.stdout}`, /no longer supports `grok import`/);
 });
 
 test("run-resume-candidate reports available after a completed run with thread id", () => {

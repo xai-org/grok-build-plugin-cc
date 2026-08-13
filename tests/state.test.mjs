@@ -21,6 +21,7 @@ test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   assert.equal(stateDir.startsWith(os.tmpdir()), true);
   assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
   assert.match(stateDir, /grok-cc-runs/);
+  assert.match(stateDir, /[/\\]grok-build[/\\]/);
 });
 
 test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
@@ -32,8 +33,9 @@ test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
   try {
     const stateDir = resolveStateDir(workspace);
 
-    assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
+    assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state", "grok-build")), true);
     assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+    assert.match(stateDir, /[/\\]grok-build[/\\]/);
   } finally {
     if (previousPluginDataDir == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;

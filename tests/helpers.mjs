@@ -10,6 +10,17 @@ export function makeTempDir(prefix = "grok-build-plugin-test-") {
 
 export function writeExecutable(filePath, source) {
   fs.writeFileSync(filePath, source, { encoding: "utf8", mode: 0o755 });
+  // Windows spawn without shell:true resolves via PATHEXT and skips
+  // extensionless files, so a .cmd shim is required for the fake grok
+  // fixture to run instead of a real grok.exe on PATH (issue #20).
+  if (process.platform === "win32") {
+    const scriptName = path.basename(filePath);
+    fs.writeFileSync(
+      `${filePath}.cmd`,
+      `@echo off\r\nnode "%~dp0${scriptName}" %*\r\n`,
+      { encoding: "utf8" }
+    );
+  }
 }
 
 export function run(command, args, options = {}) {

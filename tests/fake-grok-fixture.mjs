@@ -77,7 +77,8 @@ if (argv[0] === "import") {
 
 // Headless print / prompt modes
 const printIndex = argv.indexOf("-p");
-const isPrint = printIndex !== -1 || hasFlag("--print");
+const promptFile = flagValue("--prompt-file");
+const isPrint = printIndex !== -1 || hasFlag("--print") || Boolean(promptFile);
 if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag("--continue")) {
   if (scenario === "fail-print") {
     process.stderr.write("fake grok failed the print run\\n");
@@ -109,14 +110,31 @@ process.stderr.write("fake grok: unknown invocation: " + argv.join(" ") + "\\n")
 process.exit(1);
 `;
 
+  if (process.platform === "win32") {
+    // Do not leave an extensionless `grok` on Windows. PATH search can
+    // pick that file, fail to execute it, then fall through to a real
+    // grok.exe later on PATH (issue #20).
+    const jsPath = path.join(binDir, "grok.js");
+    fs.writeFileSync(jsPath, source, { encoding: "utf8" });
+    fs.writeFileSync(
+      path.join(binDir, "grok.cmd"),
+      `@echo off\r\nnode "%~dp0grok.js" %*\r\n`,
+      { encoding: "utf8" }
+    );
+    return jsPath;
+  }
+
   writeExecutable(scriptPath, source);
   return scriptPath;
 }
 
 export function buildEnv(binDir, extra = {}) {
+  const grokBinary =
+    process.platform === "win32" ? path.join(binDir, "grok.cmd") : path.join(binDir, "grok");
   return {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    GROK_BINARY: grokBinary,
     ...extra
   };
 }
