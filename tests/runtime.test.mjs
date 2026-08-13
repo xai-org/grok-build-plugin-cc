@@ -155,7 +155,7 @@ test("review forwards --model and --effort to grok", () => {
 
   const result = run(
     "node",
-    [SCRIPT, "review", "--model", "grok-build", "--effort", "high"],
+    [SCRIPT, "review", "--model", "grok-build", "--effort", "xhigh"],
     {
       cwd: repo,
       env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
@@ -167,7 +167,7 @@ test("review forwards --model and --effort to grok", () => {
   assert.ok(argv.includes("--model"));
   assert.equal(argv[argv.indexOf("--model") + 1], "grok-build");
   assert.ok(argv.includes("--effort"));
-  assert.equal(argv[argv.indexOf("--effort") + 1], "high");
+  assert.equal(argv[argv.indexOf("--effort") + 1], "xhigh");
 });
 
 test("critique forwards --model and --effort to grok", () => {
@@ -193,7 +193,7 @@ test("critique forwards --model and --effort to grok", () => {
 test("review rejects unsupported --effort values", () => {
   const { repo, binDir, pluginDataDir } = setupReviewableRepo();
 
-  for (const effort of ["extreme", "xhigh", "max"]) {
+  for (const effort of ["extreme", "max"]) {
     const result = run("node", [SCRIPT, "review", "--effort", effort], {
       cwd: repo,
       env: pluginDataEnv(pluginDataDir, binDir)

@@ -69,16 +69,16 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high"]);
+const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 
 function printUsage() {
   console.log(
     [
       "Usage:",
       "  node scripts/grok-bridge.mjs check [--json]",
-      "  node scripts/grok-bridge.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>]",
-      "  node scripts/grok-bridge.mjs critique [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>] [focus text]",
-      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [prompt]",
+      "  node scripts/grok-bridge.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high|xhigh>]",
+      "  node scripts/grok-bridge.mjs critique [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high|xhigh>] [focus text]",
+      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high|xhigh>] [prompt]",
       "  node scripts/grok-bridge.mjs import [--source <claude-jsonl>] [--json]",
       "  node scripts/grok-bridge.mjs runs [run-id] [--all] [--json]",
       "  node scripts/grok-bridge.mjs show [run-id] [--json]",
@@ -109,7 +109,7 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: low, medium, high.`
+      `Unsupported reasoning effort "${effort}". Use one of: low, medium, high, xhigh.`
     );
   }
   return normalized;
