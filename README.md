@@ -177,6 +177,18 @@ Tests use Node's built-in test runner and a fake `grok` binary on `PATH`. Runtim
 
 Version: `0.2.0`.
 
+## Spectator phone (Build Remote Agent)
+
+This plugin stays the Claude Code ↔ Grok CLI bridge. To spectate the **desktop** Claude Code / Grok Build session from a phone, pair [Build Remote Agent](https://grokbuildremote.com/) with `gbr-agent` (`gbr/1`). See [docs/gbr.md](docs/gbr.md). Independent product — not affiliated with xAI or SpaceX.
+
+```bash
+curl -fsSL https://grokbuildremote.com/install.sh | bash
+gbr-agent version && gbr-agent pair && gbr-agent run
+curl -sS http://127.0.0.1:8788/health
+```
+
+Attach only `http://127.0.0.1:8788` or stdio `gbr-mcp`. Never commit mailbox keys.
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE`.
