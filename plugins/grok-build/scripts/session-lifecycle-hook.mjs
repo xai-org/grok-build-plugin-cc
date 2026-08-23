@@ -51,19 +51,23 @@ function appendEnvVar(name, value) {
     }
   }
 
-  // Drop the empty split tail so a trailing newline cannot re-grow the file by one
-  // byte per call. Exactly one: it is the artefact this split just created.
-  //
-  // Filtering every blank entry instead would also delete blank lines another hook
-  // wrote, and CLAUDE_ENV_FILE is shared. Reformatting someone else's content on
-  // every session start, resume and compaction is a quieter version of the problem
-  // this function exists to fix.
-  const kept = existing.split(/\r?\n/).filter((entry) => !isLineForVar(name, entry));
-  if (kept.length > 0 && kept[kept.length - 1] === "") {
-    kept.pop();
+  // Split so every line keeps its own terminator instead of having one imposed on
+  // it. CLAUDE_ENV_FILE is shared, and reformatting content another hook wrote is a
+  // quieter version of the problem this function exists to fix: splitting on
+  // /\r?\n/ and joining with \n silently rewrites a foreign CRLF line as LF, and
+  // filtering blank entries would delete blank lines somebody else put there.
+  // Carrying the terminators through leaves both alone without a special case.
+  const kept = (existing.match(/[^\n]*\n|[^\n]+/g) ?? []).filter(
+    (entry) => !isLineForVar(name, entry)
+  );
+
+  // Only the final line can lack a terminator, and appending after it would splice
+  // the two together.
+  let head = kept.join("");
+  if (head.length > 0 && !head.endsWith("\n")) {
+    head += "\n";
   }
-  const next = kept.length > 0 ? `${kept.join("\n")}\n${line}` : line;
-  fs.writeFileSync(file, next, "utf8");
+  fs.writeFileSync(file, head + line, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
