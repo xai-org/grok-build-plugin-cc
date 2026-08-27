@@ -1,0 +1,11 @@
+{
+  "name": "@barscn/grok-build-codex",
+  "version": "0.2.1+codex.1",
+  "private": true,
+  "type": "module",
+  "description": "Codex Grok Build bridge for review, critique, and delegation.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}

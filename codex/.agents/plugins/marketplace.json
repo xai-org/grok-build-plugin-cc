@@ -1,0 +1,12 @@
+{
+  "name": "barscn-grok-build",
+  "interface": { "displayName": "Grok Build for Codex" },
+  "plugins": [
+    {
+      "name": "grok-build",
+      "source": { "source": "local", "path": "./plugins/grok-build" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
