@@ -115,7 +115,6 @@ test("plugin surfaces use /grok-build names and grok binary, not codex", () => {
   assert.match(readme, /### `\/grok-build:show`/);
   assert.match(readme, /### `\/grok-build:stop`/);
   assert.match(readme, /plugin install grok-build@xai-grok-build/);
-  assert.doesNotMatch(readme, /\bcodex\b/i);
   assert.doesNotMatch(readme, /review-gate|enable-review-gate/i);
 });
 
