@@ -10,6 +10,17 @@ Version: `0.2.1+codex.1`. The `0.2.1` base identifies the upstream Claude Code r
 - Grok Build CLI (`grok`) on `PATH`, or set `GROK_BINARY`
 - An authenticated Grok session; verify with `grok models`
 
+## Install
+
+From a clone of this repository, add the Codex marketplace with an absolute path and install the plugin:
+
+```bash
+codex plugin marketplace add /absolute/path/to/grok-build-plugin/codex
+codex plugin add grok-build@barscn-grok-build
+```
+
+Start a new Codex thread after install so the plugin is available.
+
 ## Supported operations
 
 The bundled bridge supports:
@@ -21,7 +32,7 @@ The bundled bridge supports:
 - Explicitly authorized implementation: `run --write`
 - Background work, continuation, inspection, and cancellation: `--background`, `runs`, `show`, `stop`, `--resume-last`
 
-Read-only execution is the default. Grok receives write access only when the current user request explicitly asks Grok to modify the workspace. Reviews and critiques always remain read-only.
+Read-only execution is the default. `review`, `critique`, and `run` are read-only. Only an explicit `run --write` removes the sandbox. Reviews and critiques always remain read-only. General installation of this plugin is not write authorization.
 
 ## State
 
