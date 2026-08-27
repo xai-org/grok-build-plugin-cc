@@ -97,13 +97,7 @@ test("Codex package excludes Claude-only surfaces", () => {
   for (const relativePath of ["commands", "agents", "hooks", "scripts/session-lifecycle-hook.mjs", "scripts/lib/claude-session-transfer.mjs"]) {
     assert.equal(fs.existsSync(path.join(CODEX_PLUGIN, relativePath)), false, relativePath);
   }
-  const skill = read("skills/grok-build/SKILL.md");
-  assert.match(skill, /check --json/);
-  assert.match(skill, /--cwd/);
-  assert.match(skill, /run --write/);
-  assert.match(skill, /explicitly asks Grok to implement/i);
-  assert.match(skill, /Reviews and critiques are always read-only/i);
-  assert.match(skill, /Do not silently replace/i);
+  assert.equal(fs.existsSync(path.join(CODEX_PLUGIN, "skills", "grok-build", "SKILL.md")), true);
 });
 ```
 
@@ -170,7 +164,17 @@ Run: `node --test tests/codex-package.test.mjs`
 
 Expected: PASS for marketplace, manifest, skill, exclusions, and byte identity.
 
-- [ ] **Step 6: Commit the package contract**
+- [ ] **Step 6: Validate the copied skill structurally**
+
+Run:
+
+```bash
+python3 /Users/baroman/.codex/skills/.system/skill-creator/scripts/quick_validate.py codex/plugins/grok-build/skills/grok-build
+```
+
+Expected: validation succeeds with valid `grok-build` frontmatter and no unfinished placeholders. Behavioral forward-testing is reserved for the independent Codex review gate in Task 5; do not add regex assertions over Markdown prose.
+
+- [ ] **Step 7: Commit the package contract**
 
 ```bash
 git add codex tests/codex-package.test.mjs
@@ -428,7 +432,7 @@ test("repo host manifests are in sync at 0.2.1 and 0.2.1+codex.1", () => {
 });
 ```
 
-Add README assertions to `tests/codex-package.test.mjs` for the exact install commands and the current Claude `Version: 0.2.1` line.
+Do not add regex tests over README prose. Installation commands and the current Claude `Version: 0.2.1` line are review requirements verified by Codex during final documentation inspection.
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
@@ -509,7 +513,17 @@ Expected: `Plugin validation passed`.
 
 If this machine's existing PyYAML path changes, locate another already-installed PyYAML environment. Do not add a repository dependency solely for validation.
 
-- [ ] **Step 3: Validate release metadata and JavaScript syntax**
+- [ ] **Step 3: Validate the Codex skill and forward-test its decisions**
+
+Run:
+
+```bash
+python3 /Users/baroman/.codex/skills/.system/skill-creator/scripts/quick_validate.py codex/plugins/grok-build/skills/grok-build
+```
+
+Expected: structural skill validation succeeds. The Codex orchestrator then runs an independent, isolated forward evaluation using the packaged skill against two realistic requests: a read-only repository investigation and an explicitly authorized implementation request. The first must select `run` without `--write`; the second may select `run --write`; both must require readiness and an absolute `--cwd`. Review the agent's actual decision trace and tool arguments rather than matching skill text.
+
+- [ ] **Step 4: Validate release metadata and JavaScript syntax**
 
 Run:
 
@@ -524,7 +538,7 @@ node --check codex/plugins/grok-build/scripts/lib/job-control.mjs
 
 Expected: version check and every syntax check exit zero.
 
-- [ ] **Step 4: Inspect repository boundaries and diff quality**
+- [ ] **Step 5: Inspect repository boundaries and diff quality**
 
 Run:
 
@@ -537,13 +551,13 @@ git diff HEAD~4..HEAD -- plugins/grok-build .claude-plugin
 
 Expected: no whitespace errors; only planned files are present; the final command shows no Claude plugin or Claude marketplace changes.
 
-- [ ] **Step 5: Correct only evidence-backed failures**
+- [ ] **Step 6: Correct only evidence-backed failures**
 
-For any failed gate, add or adjust a focused regression test first, verify it fails for the observed reason, make the minimal correction, rerun the focused test, and then repeat Steps 1-4. Do not refactor unrelated upstream code.
+For any failed gate, add or adjust a focused regression test first, verify it fails for the observed reason, make the minimal correction, rerun the focused test, and then repeat Steps 1-5. Do not refactor unrelated upstream code.
 
-- [ ] **Step 6: Commit verification corrections if any**
+- [ ] **Step 7: Commit verification corrections if any**
 
-If Step 5 changed files:
+If Step 6 changed files:
 
 ```bash
 git add codex/plugins/grok-build tests/codex-package.test.mjs tests/codex-state.test.mjs tests/codex-job-control.test.mjs tests/codex-permissions.test.mjs tests/codex-runtime.test.mjs tests/fake-grok-fixture.mjs scripts/bump-version.mjs tests/bump-version.test.mjs README.md

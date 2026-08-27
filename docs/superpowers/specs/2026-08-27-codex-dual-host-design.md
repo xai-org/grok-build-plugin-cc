@@ -178,7 +178,7 @@ The existing Claude suite remains the baseline and must continue to pass. New Co
 
 - marketplace and plugin manifest schema, names, version, and source paths;
 - absence of Claude-only commands, agents, hooks, transcript import, and session environment names;
-- required Codex skill orchestration and write-authorization wording;
+- valid Codex skill frontmatter, discovery, and realistic forward behavior under read-only and explicitly authorized write requests;
 - Codex readiness, review, critique, run, runs, show, resume, and stop behavior through the fake Grok fixture;
 - read-only and write-mode Grok arguments;
 - `GROK_CODEX_DATA` and default state-root resolution;
@@ -186,13 +186,14 @@ The existing Claude suite remains the baseline and must continue to pass. New Co
 - retained auth stderr diagnostics;
 - byte identity of the explicitly shared file set;
 - JavaScript syntax and plugin-manifest validation;
-- README installation commands and version consistency.
+- version consistency, with installation documentation reviewed as human-facing prose rather than regex-tested.
 
 Verification gates are:
 
 ```bash
 npm test
 python3 /Users/baroman/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py codex/plugins/grok-build
+python3 /Users/baroman/.codex/skills/.system/skill-creator/scripts/quick_validate.py codex/plugins/grok-build/skills/grok-build
 node scripts/bump-version.mjs --check
 git diff --check
 ```
