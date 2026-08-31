@@ -7,7 +7,7 @@ import { writeExecutable } from "./helpers.mjs";
 /**
  * Install a fake `grok` binary that responds to version/models/-p/import for hermetic tests.
  * @param {string} binDir directory that will be prepended to PATH
- * @param {"default"|"not-logged-in"|"fail-print"|"import-ok"} scenario
+ * @param {"default"|"not-logged-in"|"fail-print"|"import-ok"|"models-stderr"} scenario
  */
 export function installFakeGrok(binDir, scenario = "default") {
   fs.mkdirSync(binDir, { recursive: true });
@@ -53,6 +53,10 @@ if (argv[0] === "models") {
     process.exit(1);
   }
   process.stdout.write("You are logged in with grok.com.\\n\\nDefault model: fake-model\\n\\nAvailable models:\\n  - fake-model\\n");
+  const modelsStderr = process.env.FAKE_GROK_MODELS_STDERR;
+  if (scenario === "models-stderr" || modelsStderr) {
+    process.stderr.write(modelsStderr || "warning: models catalog is stale\\n");
+  }
   process.exit(0);
 }
 

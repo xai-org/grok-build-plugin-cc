@@ -1,0 +1,24 @@
+{
+  "name": "grok-build",
+  "version": "0.2.1+codex.1",
+  "description": "Codex Grok Build bridge for review, critique, and delegation.",
+  "author": {
+    "name": "barscn"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/barscn/grok-build-plugin",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Grok Build for Codex",
+    "shortDescription": "Delegate review, critique, and Grok runs from Codex.",
+    "longDescription": "Run the local Grok Build CLI from Codex for read-only Git review, architecture critique, investigation, and explicitly authorized write work. Persistent run state lives under ~/.codex/grok-build/state.",
+    "developerName": "barscn",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Review local Git changes with Grok.",
+      "Critique this architecture with Grok.",
+      "Investigate this workspace with Grok."
+    ]
+  }
+}

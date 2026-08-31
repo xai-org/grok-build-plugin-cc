@@ -58,3 +58,4 @@ dist
 .vite/
 
 output/
+.worktrees/

@@ -40,6 +40,14 @@ function makeVersionFixture() {
       }
     ]
   });
+  writeJson(path.join(root, "codex", "plugins", "grok-build", "package.json"), {
+    name: "@barscn/grok-build-codex",
+    version: "0.1.0+codex.1"
+  });
+  writeJson(path.join(root, "codex", "plugins", "grok-build", ".codex-plugin", "plugin.json"), {
+    name: "grok-build",
+    version: "0.1.0+codex.1"
+  });
 
   return root;
 }
@@ -56,6 +64,8 @@ test("bump-version updates every release manifest", () => {
   assert.equal(readJson(path.join(root, "plugins", "grok-build", ".claude-plugin", "plugin.json")).version, "1.2.3");
   assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).metadata.version, "1.2.3");
   assert.equal(readJson(path.join(root, ".claude-plugin", "marketplace.json")).plugins[0].version, "1.2.3");
+  assert.equal(readJson(path.join(root, "codex", "plugins", "grok-build", "package.json")).version, "1.2.3+codex.1");
+  assert.equal(readJson(path.join(root, "codex", "plugins", "grok-build", ".codex-plugin", "plugin.json")).version, "1.2.3+codex.1");
 });
 
 test("bump-version check mode reports stale metadata", () => {
@@ -72,9 +82,12 @@ test("bump-version check mode reports stale metadata", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /plugins\/grok-build\/\.claude-plugin\/plugin\.json version/);
   assert.match(result.stderr, /\.claude-plugin\/marketplace\.json metadata\.version/);
+  assert.match(result.stderr, /codex\/plugins\/grok-build\/package\.json version/);
+  assert.match(result.stderr, /codex\/plugins\/grok-build\/\.codex-plugin\/plugin\.json version/);
 });
 
-test("repo manifests are in sync at 0.2.1", () => {
+test("repo host manifests are in sync at 0.2.1 and 0.2.1+codex.1", () => {
   const result = run("node", [SCRIPT, "--check", "0.2.1"], { cwd: ROOT });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /0\.2\.1\+codex\.1/);
 });

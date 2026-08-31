@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const CODEX_REVISION = 1;
 
 const TARGETS = [
   {
@@ -51,6 +52,38 @@ const TARGETS = [
     ]
   }
 ];
+
+const CODEX_TARGETS = [
+  {
+    file: "codex/plugins/grok-build/package.json",
+    values: [
+      {
+        label: "version",
+        get: (json) => json.version,
+        set: (json, version) => {
+          json.version = version;
+        }
+      }
+    ]
+  },
+  {
+    file: "codex/plugins/grok-build/.codex-plugin/plugin.json",
+    values: [
+      {
+        label: "version",
+        get: (json) => json.version,
+        set: (json, version) => {
+          json.version = version;
+        }
+      }
+    ]
+  }
+];
+
+function codexVersionFor(baseVersion, revision = CODEX_REVISION) {
+  const withoutBuild = baseVersion.split("+", 1)[0];
+  return `${withoutBuild}+codex.${revision}`;
+}
 
 function usage() {
   return [
@@ -136,10 +169,10 @@ function readPackageVersion(root) {
   return packageJson.version;
 }
 
-function checkVersions(root, expectedVersion) {
+function collectMismatches(root, targets, expectedVersion) {
   const mismatches = [];
 
-  for (const target of TARGETS) {
+  for (const target of targets) {
     const json = readJson(root, target.file);
     for (const value of target.values) {
       const actual = value.get(json);
@@ -152,10 +185,17 @@ function checkVersions(root, expectedVersion) {
   return mismatches;
 }
 
-function bumpVersion(root, version) {
+function checkVersions(root, expectedVersion) {
+  return [
+    ...collectMismatches(root, TARGETS, expectedVersion),
+    ...collectMismatches(root, CODEX_TARGETS, codexVersionFor(expectedVersion))
+  ];
+}
+
+function applyTargets(root, targets, version) {
   const changedFiles = [];
 
-  for (const target of TARGETS) {
+  for (const target of targets) {
     const json = readJson(root, target.file);
     const before = JSON.stringify(json);
 
@@ -170,6 +210,13 @@ function bumpVersion(root, version) {
   }
 
   return changedFiles;
+}
+
+function bumpVersion(root, version) {
+  return [
+    ...applyTargets(root, TARGETS, version),
+    ...applyTargets(root, CODEX_TARGETS, codexVersionFor(version))
+  ];
 }
 
 function main() {
@@ -190,7 +237,7 @@ function main() {
     if (mismatches.length > 0) {
       throw new Error(`Version metadata is out of sync:\n${mismatches.join("\n")}`);
     }
-    console.log(`All version metadata matches ${version}.`);
+    console.log(`All version metadata matches ${version} and ${codexVersionFor(version)}.`);
     return;
   }
 

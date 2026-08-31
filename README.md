@@ -1,8 +1,13 @@
-# Grok Build ↔ Claude Code Bridge
+# Grok Build Bridge
 
-Bridge [Grok Build](https://x.ai) into Claude Code for review, critique, delegation, and session import.
+Bridge [Grok Build](https://x.ai) into Claude Code and Codex for review, critique, and delegated work. Claude Code also supports session import.
 
-This repository is a Claude Code marketplace plugin that shells out to the real `grok` CLI. Run status, results, and stop are owned by the plugin (PID + log files). There is no app-server broker.
+This repository ships two host packages that shell out to the real `grok` CLI. Run status, results, and stop are owned by the plugin (PID + log files). There is no app-server broker.
+
+- Claude Code: Version: `0.2.1`
+- Codex: Version: `0.2.1+codex.1`
+
+The `0.2.1` base identifies the Claude Code revision; `+codex.1` identifies the Codex-only package.
 
 ## Requirements
 
@@ -44,6 +49,32 @@ claude plugin install grok-build@xai-grok-build
 ```
 
 Or, when Claude Code is already open, use `/plugin` and add the local marketplace path, then install `grok-build@xai-grok-build`.
+
+## Codex
+
+Install from a clone. The marketplace path must be absolute:
+
+```bash
+codex plugin marketplace add /absolute/path/to/grok-build-plugin/codex
+codex plugin add grok-build@barscn-grok-build
+```
+
+Start a new Codex thread after install so the plugin is available.
+
+Supported Codex operations:
+
+- Readiness: `check --json`
+- Read-only Git review: `review`
+- Structured architecture critique: `critique`
+- Read-only investigation: `run` (default; no `--write`)
+- Explicitly authorized implementation: `run --write`
+- Background work, continuation, inspection, and cancellation: `--background`, `runs`, `show`, `stop`, `--resume-last`
+
+Persistent run state is stored under `~/.codex/grok-build/state`, partitioned by canonical workspace path. Set `GROK_CODEX_DATA` to override the data root.
+
+Read/write policy: `review`, `critique`, and `run` are read-only. Only an explicit `run --write` removes the sandbox. Reviews and critiques always remain read-only.
+
+The Codex package does not include Claude Code commands, agents, hooks, or transcript import. Codex transcript transfer will not be added without a stable documented export interface.
 
 ## Check readiness
 
@@ -164,6 +195,7 @@ Kills every distinct pid among `agentPid` (detached grok child) and `bridgePid` 
 | `CLAUDE_PLUGIN_DATA` | Plugin data root; state lives under `.../state` |
 | `CLAUDE_ENV_FILE` | Host env file for session hooks |
 | `CLAUDE_PROJECT_DIR` | Project directory from the host |
+| `GROK_CODEX_DATA` | Optional Codex data-root override; default state is `~/.codex/grok-build/state` |
 
 State fallback when `CLAUDE_PLUGIN_DATA` is unset: `$TMPDIR/grok-cc-runs`.
 
@@ -175,7 +207,7 @@ npm test
 
 Tests use Node's built-in test runner and a fake `grok` binary on `PATH`. Runtime code uses Node stdlib only.
 
-Version: `0.2.0`.
+Version: `0.2.1`. Codex: Version: `0.2.1+codex.1`.
 
 ## License
 

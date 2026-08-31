@@ -1,0 +1,22 @@
+Grok Build Plugin for Claude Code
+Copyright 2026 xAI
+
+Layout inspiration for the Claude Code marketplace plugin structure draws briefly
+from community plugin packaging patterns; the product surface, commands, and
+runtime here are Grok-native and shell out to the Grok Build CLI.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Codex adaptation by barscn based on xai-org/grok-build-plugin-cc
+upstream revision 92b76a670713335229644e94add15ab40c80e547.
+Claude Code packaging, hooks, and transcript transfer are not included.
