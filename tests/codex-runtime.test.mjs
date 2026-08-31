@@ -236,7 +236,16 @@ test("runs and show surface the latest finished run as JSON", () => {
   assert.equal(showPayload.job.status, "completed");
   assert.equal(showPayload.job.jobClass, "task");
   assert.equal(showPayload.job.threadId, statusPayload.latestFinished.threadId);
+  assert.equal(Object.hasOwn(statusPayload.latestFinished, "sessionId"), false);
+  assert.equal(Object.hasOwn(showPayload.job, "sessionId"), false);
   assert.match(showPayload.storedJob?.result?.rawOutput ?? "", /Handled the requested task/);
+
+  const textStatus = run("node", [SCRIPT, "runs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  assert.equal(textStatus.status, 0, textStatus.stderr);
+  assert.doesNotMatch(textStatus.stdout, /\/grok-build:/);
 });
 
 test("run-resume-candidate reports the latest workspace task and threadId", () => {
@@ -396,5 +405,6 @@ test("stop without a run id is rejected when two jobs are active", () => {
     });
     assert.notEqual(result.status, 0, result.stdout);
     assert.match(`${result.stdout}\n${result.stderr}`, /Multiple Grok Build runs are active/);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /\/grok-build:/);
   });
 });

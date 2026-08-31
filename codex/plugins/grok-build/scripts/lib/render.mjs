@@ -111,9 +111,9 @@ function appendActiveJobsTable(lines, jobs) {
   lines.push("| Run | Kind | Status | Phase | Elapsed | Grok Session ID | Summary | Actions |");
   lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const job of jobs) {
-    const actions = [`/grok-build:runs ${job.id}`];
+    const actions = [`runs ${job.id}`];
     if (job.status === "queued" || job.status === "running") {
-      actions.push(`/grok-build:stop ${job.id}`);
+      actions.push(`stop ${job.id}`);
     }
     lines.push(
       `| ${escapeMarkdownCell(job.id)} | ${escapeMarkdownCell(job.kindLabel)} | ${escapeMarkdownCell(job.status)} | ${escapeMarkdownCell(job.phase ?? "")} | ${escapeMarkdownCell(job.elapsed ?? "")} | ${escapeMarkdownCell(job.threadId ?? "")} | ${escapeMarkdownCell(job.summary ?? "")} | ${actions.map((action) => `\`${action}\``).join("<br>")} |`
@@ -146,14 +146,14 @@ function pushJobDetails(lines, job, options = {}) {
     lines.push(`  Log: ${job.logFile}`);
   }
   if ((job.status === "queued" || job.status === "running") && options.showCancelHint) {
-    lines.push(`  Stop: /grok-build:stop ${job.id}`);
+    lines.push(`  Stop: stop ${job.id} through the Grok Build bridge`);
   }
   if (job.status !== "queued" && job.status !== "running" && options.showResultHint) {
-    lines.push(`  Show: /grok-build:show ${job.id}`);
+    lines.push(`  Show: show ${job.id} through the Grok Build bridge`);
   }
   if (job.status !== "queued" && job.status !== "running" && job.jobClass === "task" && job.write && options.showReviewHint) {
-    lines.push("  Review changes: /grok-build:review --wait");
-    lines.push("  Stricter pass: /grok-build:critique --wait");
+    lines.push("  Review changes: review --wait through the Grok Build bridge");
+    lines.push("  Stricter pass: critique --wait through the Grok Build bridge");
   }
   if (job.progressPreview?.length) {
     lines.push("  Progress:");
@@ -457,7 +457,7 @@ export function renderCancelReport(job) {
   if (delivered === false) {
     lines.push("- Kill delivered: false (process may still be running).");
   }
-  lines.push("- Check `/grok-build:runs` for the updated queue.");
+  lines.push("- Check the Grok Build bridge `runs` command for the updated queue.");
 
   return `${lines.join("\n").trimEnd()}\n`;
 }

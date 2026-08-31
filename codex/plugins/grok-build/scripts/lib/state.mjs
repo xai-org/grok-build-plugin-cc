@@ -75,6 +75,10 @@ export function ensureStateDir(cwd) {
   fs.mkdirSync(resolveJobsDir(cwd), { recursive: true });
 }
 
+function writeJobPayload(filePath, payload) {
+  writeFileAtomic(filePath, `${JSON.stringify(omitSessionId(payload), null, 2)}\n`);
+}
+
 function writeFileAtomic(filePath, content) {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
@@ -135,25 +139,34 @@ function readJobFileIfPresent(cwd, jobId) {
 
 function writeJobFileUnlocked(cwd, jobId, payload) {
   ensureStateDir(cwd);
-  writeFileAtomic(resolveJobFile(cwd, jobId), `${JSON.stringify(payload, null, 2)}\n`);
+  writeJobPayload(resolveJobFile(cwd, jobId), payload);
+}
+
+function omitSessionId(job) {
+  if (!job || typeof job !== "object" || Array.isArray(job)) {
+    return job;
+  }
+  const { sessionId: _ignored, ...rest } = job;
+  return rest;
 }
 
 function upsertJobInState(state, jobPatch) {
   const timestamp = nowIso();
-  const existingIndex = state.jobs.findIndex((job) => job.id === jobPatch.id);
+  const sanitized = omitSessionId(jobPatch);
+  const existingIndex = state.jobs.findIndex((job) => job.id === sanitized.id);
   if (existingIndex === -1) {
-    state.jobs.unshift({
+    state.jobs.unshift(omitSessionId({
       createdAt: timestamp,
       updatedAt: timestamp,
-      ...jobPatch
-    });
+      ...sanitized
+    }));
     return;
   }
-  state.jobs[existingIndex] = {
+  state.jobs[existingIndex] = omitSessionId({
     ...state.jobs[existingIndex],
-    ...jobPatch,
+    ...sanitized,
     updatedAt: timestamp
-  };
+  });
 }
 
 /** Claim terminal status for job file + index under one lock. cancelled wins. */
@@ -181,7 +194,7 @@ export function claimJobTerminal(cwd, jobId, nextStatus, patch = {}) {
         return { claimed: false, status: currentStatus, job: existing, reason: "already-terminal" };
       }
       if (currentStatus === "cancelled" && nextStatus === "cancelled") {
-        const merged = {
+        const merged = omitSessionId({
           ...existing,
           ...patch,
           id: jobId,
@@ -190,7 +203,7 @@ export function claimJobTerminal(cwd, jobId, nextStatus, patch = {}) {
           pid: null,
           agentPid: null,
           updatedAt: nowIso()
-        };
+        });
         writeJobFileUnlocked(cwd, jobId, merged);
         upsertJobInState(state, {
           id: jobId,
@@ -209,7 +222,7 @@ export function claimJobTerminal(cwd, jobId, nextStatus, patch = {}) {
     }
 
     const completedAt = patch.completedAt ?? nowIso();
-    const nextJob = {
+    const nextJob = omitSessionId({
       ...existing,
       ...patch,
       id: jobId,
@@ -220,7 +233,7 @@ export function claimJobTerminal(cwd, jobId, nextStatus, patch = {}) {
       bridgePid: resolveBridgePidField(existing, patch),
       completedAt,
       updatedAt: nowIso()
-    };
+    });
     if (nextStatus === "cancelled") {
       nextJob.cancelledAt = patch.cancelledAt ?? completedAt;
     }
@@ -239,7 +252,6 @@ export function claimJobTerminal(cwd, jobId, nextStatus, patch = {}) {
       errorMessage: nextJob.errorMessage,
       completedAt,
       logFile: nextJob.logFile ?? existing.logFile ?? null,
-      sessionId: nextJob.sessionId ?? existing.sessionId,
       kind: nextJob.kind ?? existing.kind,
       kindLabel: nextJob.kindLabel ?? existing.kindLabel,
       title: nextJob.title ?? existing.title,
@@ -266,7 +278,7 @@ export function patchJobIfActive(cwd, jobId, patch = {}) {
     }
 
     const bridgePid = resolveBridgePidField(existing, patch);
-    const nextJob = {
+    const nextJob = omitSessionId({
       ...existing,
       ...patch,
       id: jobId,
@@ -277,7 +289,7 @@ export function patchJobIfActive(cwd, jobId, patch = {}) {
           ? patch.pid
           : (bridgePid ?? existing.pid ?? null),
       updatedAt: nowIso()
-    };
+    });
 
     writeJobFileUnlocked(cwd, jobId, nextJob);
     upsertJobInState(state, {
@@ -324,7 +336,7 @@ export function loadState(cwd) {
         ...defaultState().config,
         ...(parsed.config ?? {})
       },
-      jobs: Array.isArray(parsed.jobs) ? parsed.jobs : []
+      jobs: Array.isArray(parsed.jobs) ? parsed.jobs.map((job) => omitSessionId(job)) : []
     };
   } catch (error) {
     const quarantinePath = `${stateFile}.corrupt-${Date.now()}`;
@@ -360,7 +372,7 @@ function saveStateUnlocked(cwd, state) {
       ...defaultState().config,
       ...(state.config ?? {})
     },
-    jobs: nextJobs
+    jobs: nextJobs.map((job) => omitSessionId(job))
   };
 
   const retainedIds = new Set(nextJobs.map((job) => job.id));
@@ -396,20 +408,21 @@ export function generateJobId(prefix = "job") {
 export function upsertJob(cwd, jobPatch) {
   return updateState(cwd, (state) => {
     const timestamp = nowIso();
-    const existingIndex = state.jobs.findIndex((job) => job.id === jobPatch.id);
+    const sanitized = omitSessionId(jobPatch);
+    const existingIndex = state.jobs.findIndex((job) => job.id === sanitized.id);
     if (existingIndex === -1) {
-      state.jobs.unshift({
+      state.jobs.unshift(omitSessionId({
         createdAt: timestamp,
         updatedAt: timestamp,
-        ...jobPatch
-      });
+        ...sanitized
+      }));
       return;
     }
-    state.jobs[existingIndex] = {
+    state.jobs[existingIndex] = omitSessionId({
       ...state.jobs[existingIndex],
-      ...jobPatch,
+      ...sanitized,
       updatedAt: timestamp
-    };
+    });
   });
 }
 
@@ -433,12 +446,12 @@ export function getConfig(cwd) {
 export function writeJobFile(cwd, jobId, payload) {
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
-  writeFileAtomic(jobFile, `${JSON.stringify(payload, null, 2)}\n`);
+  writeJobPayload(jobFile, payload);
   return jobFile;
 }
 
 export function readJobFile(jobFile) {
-  return JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  return omitSessionId(JSON.parse(fs.readFileSync(jobFile, "utf8")));
 }
 
 function removeJobFile(jobFile) {

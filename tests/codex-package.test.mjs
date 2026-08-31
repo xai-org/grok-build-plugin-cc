@@ -25,7 +25,6 @@ const SHARED_FILES = [
   "scripts/lib/git.mjs",
   "scripts/lib/process.mjs",
   "scripts/lib/prompts.mjs",
-  "scripts/lib/render.mjs",
   "scripts/lib/workspace.mjs"
 ];
 
@@ -70,4 +69,24 @@ test("explicitly shared files match the Claude package byte-for-byte", () => {
       relativePath
     );
   }
+});
+
+test("Codex package contains no Claude slash-command strings", () => {
+  const stack = [CODEX_PLUGIN];
+  const matches = [];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      const text = fs.readFileSync(fullPath, "utf8");
+      if (text.includes("/grok-build:")) {
+        matches.push(path.relative(CODEX_PLUGIN, fullPath));
+      }
+    }
+  }
+  assert.deepEqual(matches, []);
 });

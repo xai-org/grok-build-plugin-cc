@@ -5,8 +5,6 @@ import {
   claimJobTerminal,
   isTerminalJobStatus,
   patchJobIfActive,
-  readJobFile,
-  resolveJobFile,
   resolveJobLogFile,
   upsertJob,
   writeJobFile
@@ -133,14 +131,6 @@ export function createProgressReporter({ stderr = false, logFile = null, onEvent
     appendLogBlock(logFile, event.logTitle, event.logBody);
     onEvent?.(event);
   };
-}
-
-function readStoredJobOrNull(workspaceRoot, jobId) {
-  const jobFile = resolveJobFile(workspaceRoot, jobId);
-  if (!fs.existsSync(jobFile)) {
-    return null;
-  }
-  return readJobFile(jobFile);
 }
 
 export function resolveJobKillTargets(job = {}) {

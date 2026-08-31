@@ -221,7 +221,7 @@ function ensureGrokAvailable(cwd) {
   const availability = getGrokAvailability(cwd);
   if (!availability.available) {
     throw new Error(
-      "Grok CLI is not installed or not on PATH. Install it, set GROK_BINARY if needed, then rerun `/grok-build:check`."
+      "Grok CLI is not installed or not on PATH. Install it, set GROK_BINARY if needed, then rerun the Grok Build bridge `check` command."
     );
   }
 }
@@ -269,7 +269,7 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
   const activeTask = jobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    throw new Error(`Delegate run ${activeTask.id} is still running. Use /grok-build:runs before continuing it.`);
+    throw new Error(`Delegate run ${activeTask.id} is still running. Use the Grok Build bridge \`runs\` command before continuing it.`);
   }
 
   const trackedTask = findLatestResumableTaskJob(jobs);
@@ -492,7 +492,7 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /grok-build:runs ${payload.jobId} for progress.\n`;
+  return `${payload.title} started in the background as ${payload.jobId}. Check the Grok Build bridge with \`runs ${payload.jobId}\` for progress.\n`;
 }
 
 function createBridgeJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {

@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
 
@@ -266,7 +265,6 @@ export function runHeadlessAgent(cwd, options = {}) {
         signal,
         stdout,
         stderr,
-        sessionId,
         threadId: sessionId,
         agentPid,
         finalMessage: stdout.trimEnd(),

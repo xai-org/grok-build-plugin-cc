@@ -9,6 +9,7 @@ import {
   resolveCancelableJob,
   resolveResultJob
 } from "../codex/plugins/grok-build/scripts/lib/job-control.mjs";
+import { renderCancelReport, renderStatusReport } from "../codex/plugins/grok-build/scripts/lib/render.mjs";
 
 function withCodexData(fn) {
   const previous = process.env.GROK_CODEX_DATA;
@@ -144,6 +145,81 @@ test("resolveCancelableJob without a reference throws when two jobs are active",
       /Multiple Grok Build runs are active/
     );
   });
+});
+
+test("Codex job-control errors refer to bridge operations, not Claude slash commands", () => {
+  withCodexData(() => {
+    const workspaceRoot = makeTempDir();
+    seedJob(workspaceRoot, {
+      id: "job-active-1",
+      status: "running",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+      createdAt: "2026-08-02T00:00:00.000Z",
+      title: "One"
+    });
+    seedJob(workspaceRoot, {
+      id: "job-active-2",
+      status: "queued",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      title: "Two"
+    });
+
+    assert.throws(
+      () => resolveCancelableJob(workspaceRoot),
+      (error) => {
+        assert.doesNotMatch(error.message, /\/grok-build:/);
+        assert.match(error.message, /Multiple Grok Build runs are active/);
+        assert.match(error.message, /\bstop\b/i);
+        return true;
+      }
+    );
+
+    assert.throws(
+      () => resolveResultJob(workspaceRoot, "missing-run"),
+      (error) => {
+        assert.doesNotMatch(error.message, /\/grok-build:/);
+        assert.match(error.message, /\bruns\b/i);
+        return true;
+      }
+    );
+  });
+});
+
+test("Codex status and stop rendering refer to bridge operations, not Claude slash commands", () => {
+  const status = renderStatusReport({
+    sessionRuntime: { label: "plugin-owned runs" },
+    running: [
+      {
+        id: "run-1",
+        kindLabel: "delegate",
+        status: "running",
+        phase: "running",
+        elapsed: "1s",
+        threadId: "thread-1",
+        summary: "working"
+      }
+    ],
+    latestFinished: {
+      id: "run-0",
+      kindLabel: "delegate",
+      status: "completed",
+      phase: "done",
+      duration: "2s",
+      threadId: "thread-0",
+      jobClass: "task",
+      write: true,
+      summary: "done"
+    },
+    recent: []
+  });
+  assert.doesNotMatch(status, /\/grok-build:/);
+  assert.match(status, /`runs run-1`/);
+  assert.match(status, /`stop run-1`/);
+
+  const cancelled = renderCancelReport({ id: "run-1", title: "Grok Build Delegate" });
+  assert.doesNotMatch(cancelled, /\/grok-build:/);
+  assert.match(cancelled, /\bruns\b/i);
 });
 
 test("progress reporter prefixes stderr with [grok-codex]", () => {

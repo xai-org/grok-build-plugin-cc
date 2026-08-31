@@ -303,6 +303,61 @@ test("stop claim-before-kill ordering: claim cancelled then kill targets from pr
   });
 });
 
+function assertOmitsSessionId(job, label) {
+  assert.equal(Object.hasOwn(job, "sessionId"), false, label);
+}
+
+test("Codex job records omit sessionId through create, patch, and terminal transitions", () => {
+  withCodexData(() => {
+    const workspace = makeTempDir();
+
+    for (const nextStatus of ["completed", "failed", "cancelled"]) {
+      const jobId = `job-session-${nextStatus}`;
+      const running = {
+        id: jobId,
+        status: "running",
+        phase: "running",
+        title: nextStatus,
+        sessionId: "legacy-claude-session",
+        threadId: `thread-${nextStatus}`,
+        bridgePid: 11,
+        agentPid: 22,
+        pid: 11
+      };
+      writeJobFile(workspace, jobId, running);
+      upsertJob(workspace, running);
+
+      assertOmitsSessionId(readJobFile(resolveJobFile(workspace, jobId)), `${nextStatus} stored after write`);
+      assertOmitsSessionId(
+        loadState(workspace).jobs.find((job) => job.id === jobId),
+        `${nextStatus} index after upsert`
+      );
+
+      const patched = patchJobIfActive(workspace, jobId, {
+        phase: "investigating",
+        sessionId: "should-not-persist"
+      });
+      assert.equal(patched.patched, true);
+      assertOmitsSessionId(patched.job, `${nextStatus} patched in-memory`);
+      assert.equal(patched.job.threadId, `thread-${nextStatus}`);
+
+      const claimed = claimJobTerminal(workspace, jobId, nextStatus, {
+        threadId: `thread-${nextStatus}`,
+        sessionId: "still-should-not-persist",
+        rendered: `${nextStatus}\n`
+      });
+      assert.equal(claimed.claimed, true);
+      assert.equal(claimed.status, nextStatus);
+      assertOmitsSessionId(claimed.job, `${nextStatus} claimed in-memory`);
+      assert.equal(claimed.job.threadId, `thread-${nextStatus}`);
+      assertOmitsSessionId(readJobFile(resolveJobFile(workspace, jobId)), `${nextStatus} stored after claim`);
+      const indexed = loadState(workspace).jobs.find((job) => job.id === jobId);
+      assertOmitsSessionId(indexed, `${nextStatus} index after claim`);
+      assert.equal(indexed.threadId, `thread-${nextStatus}`);
+    }
+  });
+});
+
 test("patchJobIfActive does not resurrect terminal jobs when patching worker pid", () => {
   withCodexData(() => {
     const workspace = makeTempDir();
