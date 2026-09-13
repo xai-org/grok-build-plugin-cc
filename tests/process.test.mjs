@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runCommand, terminateProcessTree } from "../plugins/grok-build/scripts/lib/process.mjs";
+import { processIsAlive, runCommand, terminateProcessTree } from "../plugins/grok-build/scripts/lib/process.mjs";
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;
@@ -176,4 +176,34 @@ test("runCommand keeps metacharacter args discrete when shell is disabled", () =
   assert.equal(captured.options.shell, false);
   assert.equal(captured.args[2], maliciousRef);
   assert.ok(!captured.args.some((arg) => arg === "probe.cmd"));
+});
+
+test("processIsAlive requires positive evidence of death", () => {
+  const gone = () => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); };
+  assert.equal(processIsAlive(123, { killImpl: gone }), false);
+  for (const code of ["EPERM", "EACCES"]) {
+    assert.equal(processIsAlive(123, {
+      killImpl: () => { throw Object.assign(new Error("denied"), { code }); },
+      spawnSyncImpl: () => { throw new Error("permission denial must not become zombie recovery"); }
+    }), true);
+  }
+  assert.throws(() => processIsAlive(123, { killImpl: () => { throw new Error("unknown"); } }), /unknown/);
+  for (const pid of [0, -1, null, "123", 1.5]) assert.throws(() => processIsAlive(pid), /Invalid process ID/);
+});
+
+test("processIsAlive protects a live or reused PID when process inspection fails", () => {
+  for (const result of [{ error: new Error("missing ps") }, { status: 1 }, { status: 0, stdout: "" }]) {
+    assert.equal(processIsAlive(123, { platform: "darwin", killImpl: () => {}, spawnSyncImpl: () => result }), true);
+  }
+  assert.equal(processIsAlive(123, {
+    platform: "darwin", killImpl: () => {},
+    spawnSyncImpl: (_command, _args, options) => {
+      assert.equal(options.timeout, 1000);
+      return { status: 0, stdout: "Z\n" };
+    }
+  }), false);
+  assert.equal(processIsAlive(123, {
+    platform: "win32", killImpl: () => {},
+    spawnSyncImpl: () => { throw new Error("Windows must not depend on ps"); }
+  }), true);
 });

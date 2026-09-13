@@ -69,18 +69,22 @@ function looksLikeMissingProcessMessage(text) {
   return /not found|no running instance|cannot find|does not exist|no such process/i.test(text);
 }
 
-function isZombieProcess(pid) {
+function isZombieProcess(pid, options = {}) {
+  if ((options.platform ?? process.platform) === "win32") {
+    return false;
+  }
   try {
-    const result = spawnSync("ps", ["-p", String(pid), "-o", "stat="], {
+    const result = (options.spawnSyncImpl ?? spawnSync)("ps", ["-p", String(pid), "-o", "stat="], {
       encoding: "utf8",
+      timeout: 1000,
       windowsHide: true
     });
     if (result.error || result.status !== 0) {
-      return true;
+      return false;
     }
     const stat = String(result.stdout ?? "").trim();
     if (!stat) {
-      return true;
+      return false;
     }
     return /\bZ\b|^Z/i.test(stat) || stat.toUpperCase().includes("Z");
   } catch {
@@ -88,7 +92,13 @@ function isZombieProcess(pid) {
   }
 }
 
-function processIsAlive(pid, killImpl) {
+// Only ESRCH or a positively identified zombie establishes that a PID is gone.
+// A failed/unsupported process inspection must not permit stealing state locks.
+export function processIsAlive(pid, options = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error(`Invalid process ID: ${pid}`);
+  }
+  const killImpl = options.killImpl ?? process.kill.bind(process);
   try {
     killImpl(pid, 0);
   } catch (error) {
@@ -96,11 +106,11 @@ function processIsAlive(pid, killImpl) {
       return false;
     }
     if (error?.code === "EPERM" || error?.code === "EACCES") {
-      return !isZombieProcess(pid);
+      return true;
     }
     throw error;
   }
-  return !isZombieProcess(pid);
+  return !isZombieProcess(pid, options);
 }
 
 function tryKill(killImpl, pid, signal) {
@@ -127,7 +137,7 @@ export function terminateProcessTree(pid, options = {}) {
   const runCommandImpl = options.runCommandImpl ?? runCommand;
   const killImpl = options.killImpl ?? process.kill.bind(process);
   const isAliveImpl =
-    options.isAliveImpl ?? ((candidatePid) => processIsAlive(candidatePid, killImpl));
+    options.isAliveImpl ?? ((candidatePid) => processIsAlive(candidatePid, { killImpl, platform }));
   const graceMs = options.graceMs ?? 200;
 
   if (platform === "win32") {

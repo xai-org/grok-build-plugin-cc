@@ -153,6 +153,39 @@ Stop an active run by terminating tracked process trees:
 
 Kills every distinct pid among `agentPid` (detached grok child) and `bridgePid` / legacy `companionPid` / legacy `pid` (bridge or run-worker). Terminal status is claimed under a locked CAS so a finishing worker cannot overwrite `cancelled` with `completed`.
 
+### Interrupted runs and state locks
+
+`runs`, `show`, and delegate continuation reconcile the selected runs when both
+the recorded bridge and Grok processes have exited. An interrupted active run
+becomes `failed` with an explanation, while its log, session ID and captured
+results remain available. Reconciliation preserves an already saved terminal
+result and repairs an index left behind by an interrupted write. Session lists
+reconcile only that session; an explicit run reference can select another one.
+
+A live process, a reused PID, an unavailable process check, or a missing PID
+keeps the run protected. In particular, an agent may have started before its PID
+was saved. Such records can remain active until their ownership can be checked;
+an old timestamp alone is not evidence that a process has exited. Plugin state
+and its process IDs are local to one host, so do not share an active state root
+between machines.
+
+New state locks use a directory at `state.json.lock`. A complete, uniquely named
+owner marker is prepared before the directory is published. An exited owner's
+marker can be removed safely; a delayed recovery attempt cannot remove a new
+owner's marker. There is no heartbeat or age based lock expiry.
+
+Older zero byte lock files and unrecognized lock metadata require manual repair.
+The timeout names the exact lock path. Stop all bridge, worker and Grok processes
+using that workspace, then move only that lock aside before restarting. Keep
+`state.json` and the `jobs` directory intact. Apply the same offline procedure
+to a lock from another hostname or an owner whose liveness cannot be checked.
+Do not move a lock while a process may still be writing.
+
+A hard kill before publication may also leave a `state.json.lock.pending-*`
+directory beside the lock. These unpublished candidates do not hold the lock
+or block subsequent work. They may be removed during the same offline repair;
+normal completion and errors clean their own candidates automatically.
+
 ## Environment
 
 | Variable | Purpose |

@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { processIsAlive } from "./process.mjs";
+import { withStateFileLock } from "./state-lock.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
@@ -12,20 +14,9 @@ const STATE_FILE_NAME = "state.json";
 const LOCK_FILE_NAME = "state.json.lock";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
-const LOCK_MAX_ATTEMPTS = 100;
-const LOCK_RETRY_MS = 20;
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function sleepMs(ms) {
-  const duration = Math.max(0, Number(ms) || 0);
-  if (duration <= 0) {
-    return;
-  }
-  const buffer = new SharedArrayBuffer(4);
-  Atomics.wait(new Int32Array(buffer), 0, 0, duration);
 }
 
 function defaultState() {
@@ -89,34 +80,7 @@ function writeFileAtomic(filePath, content) {
 export function withStateLock(cwd, fn) {
   ensureStateDir(cwd);
   const lockPath = path.join(resolveStateDir(cwd), LOCK_FILE_NAME);
-
-  for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt += 1) {
-    let fd = null;
-    try {
-      fd = fs.openSync(lockPath, "wx");
-    } catch (error) {
-      if (error?.code === "EEXIST") {
-        sleepMs(LOCK_RETRY_MS);
-        continue;
-      }
-      throw error;
-    }
-
-    try {
-      return fn();
-    } finally {
-      try {
-        fs.closeSync(fd);
-      } catch {
-      }
-      try {
-        fs.unlinkSync(lockPath);
-      } catch {
-      }
-    }
-  }
-
-  throw new Error(`Timed out acquiring state lock at ${lockPath}`);
+  return withStateFileLock(lockPath, fn);
 }
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -156,99 +120,105 @@ function upsertJobInState(state, jobPatch) {
   };
 }
 
+function jobIndexPatch(job, existing) {
+  const terminal = isTerminalJobStatus(job.status);
+  return {
+    id: job.id,
+    status: job.status,
+    phase: job.phase ?? (job.status === "completed" ? "done" : job.status),
+    summary: job.summary ?? existing.summary,
+    threadId: job.threadId ?? existing.threadId ?? null,
+    turnId: job.turnId ?? existing.turnId ?? null,
+    pid: terminal ? null : (job.pid ?? null),
+    agentPid: terminal ? null : (job.agentPid ?? null),
+    bridgePid: job.bridgePid ?? null,
+    errorMessage: job.errorMessage,
+    completedAt: job.completedAt,
+    logFile: job.logFile ?? existing.logFile ?? null,
+    sessionId: job.sessionId ?? existing.sessionId,
+    kind: job.kind ?? existing.kind,
+    kindLabel: job.kindLabel ?? existing.kindLabel,
+    title: job.title ?? existing.title,
+    jobClass: job.jobClass ?? existing.jobClass,
+    write: job.write ?? existing.write
+  };
+}
+
 /** Claim terminal status for job file + index under one lock. cancelled wins. */
 export function claimJobTerminal(cwd, jobId, nextStatus, patch = {}) {
   if (!isTerminalJobStatus(nextStatus)) {
     throw new Error(`claimJobTerminal requires a terminal status, got: ${nextStatus}`);
   }
 
-  return withStateLock(cwd, () => {
-    const state = loadState(cwd);
-    const existingFile = readJobFileIfPresent(cwd, jobId);
-    const indexJob = state.jobs.find((job) => job.id === jobId) ?? null;
-    const existing = existingFile ?? indexJob;
+  return withStateLock(cwd, () => claimJobTerminalUnlocked(cwd, jobId, nextStatus, patch, loadState(cwd)));
+}
 
-    if (!existing) {
-      return { claimed: false, status: null, job: null, reason: "missing" };
+function claimJobTerminalUnlocked(cwd, jobId, nextStatus, patch, state) {
+  const existingFile = readJobFileIfPresent(cwd, jobId);
+  const indexJob = state.jobs.find((job) => job.id === jobId) ?? null;
+  const existing = existingFile ?? indexJob;
+
+  if (!existing) {
+    return { claimed: false, status: null, job: null, reason: "missing" };
+  }
+
+  const currentStatus = existing.status;
+  if (isTerminalJobStatus(currentStatus)) {
+    if (currentStatus === "cancelled" && nextStatus !== "cancelled") {
+      return { claimed: false, status: "cancelled", job: existing, reason: "cancelled-wins" };
     }
-
-    const currentStatus = existing.status;
-    if (isTerminalJobStatus(currentStatus)) {
-      if (currentStatus === "cancelled" && nextStatus !== "cancelled") {
-        return { claimed: false, status: "cancelled", job: existing, reason: "cancelled-wins" };
-      }
-      if (nextStatus === "cancelled" && currentStatus !== "cancelled") {
-        return { claimed: false, status: currentStatus, job: existing, reason: "already-terminal" };
-      }
-      if (currentStatus === "cancelled" && nextStatus === "cancelled") {
-        const merged = {
-          ...existing,
-          ...patch,
-          id: jobId,
-          status: "cancelled",
-          phase: "cancelled",
-          pid: null,
-          agentPid: null,
-          updatedAt: nowIso()
-        };
-        writeJobFileUnlocked(cwd, jobId, merged);
-        upsertJobInState(state, {
-          id: jobId,
-          status: "cancelled",
-          phase: "cancelled",
-          summary: merged.summary ?? existing.summary,
-          threadId: merged.threadId ?? existing.threadId ?? null,
-          pid: null,
-          agentPid: null,
-          errorMessage: merged.errorMessage ?? existing.errorMessage
-        });
-        saveStateUnlocked(cwd, state);
-        return { claimed: false, status: "cancelled", job: merged, reason: "cancelled-merge" };
-      }
+    if (nextStatus === "cancelled" && currentStatus !== "cancelled") {
       return { claimed: false, status: currentStatus, job: existing, reason: "already-terminal" };
     }
-
-    const completedAt = patch.completedAt ?? nowIso();
-    const nextJob = {
-      ...existing,
-      ...patch,
-      id: jobId,
-      status: nextStatus,
-      phase: patch.phase ?? (nextStatus === "completed" ? "done" : nextStatus),
-      pid: patch.pid === undefined ? null : patch.pid,
-      agentPid: patch.agentPid === undefined ? null : patch.agentPid,
-      bridgePid: resolveBridgePidField(existing, patch),
-      completedAt,
-      updatedAt: nowIso()
-    };
-    if (nextStatus === "cancelled") {
-      nextJob.cancelledAt = patch.cancelledAt ?? completedAt;
+    if (currentStatus === "cancelled" && nextStatus === "cancelled") {
+      const merged = {
+        ...existing,
+        ...patch,
+        id: jobId,
+        status: "cancelled",
+        phase: "cancelled",
+        pid: null,
+        agentPid: null,
+        updatedAt: nowIso()
+      };
+      writeJobFileUnlocked(cwd, jobId, merged);
+      upsertJobInState(state, {
+        id: jobId,
+        status: "cancelled",
+        phase: "cancelled",
+        summary: merged.summary ?? existing.summary,
+        threadId: merged.threadId ?? existing.threadId ?? null,
+        pid: null,
+        agentPid: null,
+        errorMessage: merged.errorMessage ?? existing.errorMessage
+      });
+      saveStateUnlocked(cwd, state);
+      return { claimed: false, status: "cancelled", job: merged, reason: "cancelled-merge" };
     }
+    return { claimed: false, status: currentStatus, job: existing, reason: "already-terminal" };
+  }
 
-    writeJobFileUnlocked(cwd, jobId, nextJob);
-    upsertJobInState(state, {
-      id: jobId,
-      status: nextStatus,
-      phase: nextJob.phase,
-      summary: nextJob.summary ?? existing.summary,
-      threadId: nextJob.threadId ?? existing.threadId ?? null,
-      turnId: nextJob.turnId ?? existing.turnId ?? null,
-      pid: null,
-      agentPid: null,
-      bridgePid: nextJob.bridgePid ?? null,
-      errorMessage: nextJob.errorMessage,
-      completedAt,
-      logFile: nextJob.logFile ?? existing.logFile ?? null,
-      sessionId: nextJob.sessionId ?? existing.sessionId,
-      kind: nextJob.kind ?? existing.kind,
-      kindLabel: nextJob.kindLabel ?? existing.kindLabel,
-      title: nextJob.title ?? existing.title,
-      jobClass: nextJob.jobClass ?? existing.jobClass,
-      write: nextJob.write ?? existing.write
-    });
-    saveStateUnlocked(cwd, state);
-    return { claimed: true, status: nextStatus, job: nextJob, reason: "claimed" };
-  });
+  const completedAt = patch.completedAt ?? nowIso();
+  const nextJob = {
+    ...existing,
+    ...patch,
+    id: jobId,
+    status: nextStatus,
+    phase: patch.phase ?? (nextStatus === "completed" ? "done" : nextStatus),
+    pid: patch.pid === undefined ? null : patch.pid,
+    agentPid: patch.agentPid === undefined ? null : patch.agentPid,
+    bridgePid: resolveBridgePidField(existing, patch),
+    completedAt,
+    updatedAt: nowIso()
+  };
+  if (nextStatus === "cancelled") {
+    nextJob.cancelledAt = patch.cancelledAt ?? completedAt;
+  }
+
+  writeJobFileUnlocked(cwd, jobId, nextJob);
+  upsertJobInState(state, jobIndexPatch(nextJob, existing));
+  saveStateUnlocked(cwd, state);
+  return { claimed: true, status: nextStatus, job: nextJob, reason: "claimed" };
 }
 
 /** Patch non-terminal job under lock; no-op if missing/terminal. */
@@ -410,6 +380,65 @@ export function upsertJob(cwd, jobPatch) {
       ...jobPatch,
       updatedAt: timestamp
     };
+  });
+}
+
+function hasIndexChanges(job, indexed) {
+  return Object.entries(jobIndexPatch(job, indexed)).some(([key, value]) => indexed[key] !== value);
+}
+
+function recordedProcessesExited(job, isAlive) {
+  if (job.status !== "queued" && job.status !== "running") return false;
+  const pids = [job.bridgePid ?? job.companionPid ?? job.pid, job.agentPid];
+  // An agent can exist before its PID is published. Missing, live/reused or
+  // uninspectable PIDs are not permission to terminate the job record.
+  if (!pids.every((pid) => Number.isSafeInteger(pid) && pid > 0)) return false;
+  try {
+    return pids.every((pid) => isAlive(pid) === false);
+  } catch {
+    return false;
+  }
+}
+
+/** Reconcile only explicitly selected jobs, using fresh records under the state lock. */
+export function reconcileJobs(cwd, jobIds, options = {}) {
+  if (jobIds.length === 0) return listJobs(cwd);
+  const selected = new Set(jobIds);
+  const isAlive = options.isAliveImpl ?? processIsAlive;
+  const snapshot = listJobs(cwd);
+  // Keep ordinary status reads available while a writer holds the lock. This
+  // optimistic check never authorizes a write; recheck every record below.
+  const needsRepair = snapshot.some((indexed) => {
+    if (!selected.has(indexed.id)) return false;
+    const job = readJobFileIfPresent(cwd, indexed.id) ?? indexed;
+    return hasIndexChanges(job, indexed) || recordedProcessesExited(job, isAlive);
+  });
+  if (!needsRepair) return snapshot;
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    let repairedIndex = false;
+    for (const indexJob of state.jobs) {
+      if (!selected.has(indexJob.id)) continue;
+      const job = readJobFileIfPresent(cwd, indexJob.id) ?? indexJob;
+      if (isTerminalJobStatus(job.status) || job.status === "queued" || job.status === "running") {
+        // A killed writer may have saved the job before its index. Preserve
+        // the authoritative record, including live PIDs and terminal results.
+        const patch = jobIndexPatch(job, indexJob);
+        if (hasIndexChanges(job, indexJob)) {
+          upsertJobInState(state, patch);
+          repairedIndex = true;
+        }
+      }
+      if (!recordedProcessesExited(job, isAlive)) continue;
+      claimJobTerminalUnlocked(cwd, job.id, "failed", {
+        errorMessage: "Run interrupted: the recorded bridge and Grok processes have exited without a terminal result.",
+        bridgePid: null,
+        agentPid: null,
+        pid: null
+      }, state);
+    }
+    if (repairedIndex) saveStateUnlocked(cwd, state);
+    return state.jobs;
   });
 }
 
