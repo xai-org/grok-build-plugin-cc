@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { loadState, patchJobIfActive, readJobFile, resolveJobFile, resolveStateDir, upsertJob, withStateLock, writeJobFile } from "../plugins/grok-build/scripts/lib/state.mjs";
+import { loadState, patchJobIfActive, readJobFile, resolveJobFile, resolveStateDir, updateState, upsertJob, withStateLock, writeJobFile } from "../plugins/grok-build/scripts/lib/state.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../plugins/grok-build/scripts/grok-bridge.mjs", import.meta.url));
 const WORKER = fileURLToPath(new URL("./recovery-worker.mjs", import.meta.url));
@@ -360,4 +360,23 @@ test("completion, cancellation and recovery serialize one terminal job and index
   assert.equal(indexed.phase, saved.phase);
   assert.equal(indexed.completedAt, saved.completedAt);
   assert.equal(fs.readFileSync(logFile, "utf8"), "Existing diagnostic output.\n");
+});
+
+test("status tolerates a job pruned during its optimistic file read", async (t) => {
+  const fixture = setup(t);
+  const exited = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
+  assert.equal(exited.status, 0);
+  const job = { id: "pruned-run", status: "running", bridgePid: exited.pid, agentPid: exited.pid };
+  writeJobFile(fixture.workspace, job.id, job);
+  upsertJob(fixture.workspace, job);
+  const reader = fixture.worker("status-pruned", "reader");
+  await waitFor(() => readReady(reader.ready), "status waiting to read the job file");
+  updateState(fixture.workspace, (state) => { state.jobs = []; });
+  fs.writeFileSync(reader.release, "release");
+  assert.equal(await reader.child.closed, 0, reader.child.errors);
+  const status = readReady(`${reader.ready}.status`);
+  assert.deepEqual(status.running, []);
+  assert.equal(status.latestFinished, null);
+  assert.deepEqual(loadState(fixture.workspace).jobs, []);
+  assert.equal(fs.existsSync(resolveJobFile(fixture.workspace, job.id)), false);
 });

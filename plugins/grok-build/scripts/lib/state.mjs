@@ -91,10 +91,13 @@ export function isTerminalJobStatus(status) {
 
 function readJobFileIfPresent(cwd, jobId) {
   const jobFile = resolveJobFile(cwd, jobId);
-  if (!fs.existsSync(jobFile)) {
-    return null;
+  try {
+    return readJobFile(jobFile);
+  } catch (error) {
+    // An optimistic status read can overlap retention removing this job.
+    if (error?.code === "ENOENT") return null;
+    throw error;
   }
-  return readJobFile(jobFile);
 }
 
 function writeJobFileUnlocked(cwd, jobId, payload) {

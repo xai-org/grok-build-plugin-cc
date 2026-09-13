@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import * as state from "../plugins/grok-build/scripts/lib/state.mjs";
+import { buildStatusSnapshot } from "../plugins/grok-build/scripts/lib/job-control.mjs";
 
 const { claimJobTerminal, resolveJobFile, resolveStateDir, updateState, withStateLock } = state;
 
@@ -21,7 +22,16 @@ function waitUntilReleased(file) {
 }
 
 const lockPath = path.join(resolveStateDir(workspace), "state.json.lock");
-if (mode === "reap-hold") {
+if (mode === "status-pruned") {
+  const read = fs.readFileSync;
+  fs.readFileSync = (file, ...args) => {
+    if (file === resolveJobFile(workspace, "pruned-run")) {
+      announce({ beforeJobRead: true });
+      waitUntilReleased(release);
+    }
+    return read(file, ...args);
+  };
+} else if (mode === "reap-hold") {
   const unlink = fs.unlinkSync;
   const rename = fs.renameSync;
   let observedDeadOwner = false;
@@ -75,7 +85,10 @@ if (mode === "reap-hold") {
   };
 }
 
-if (mode === "reconcile-paused") {
+if (mode === "status-pruned") {
+  const status = buildStatusSnapshot(workspace);
+  fs.writeFileSync(`${ready}.status`, JSON.stringify(status));
+} else if (mode === "reconcile-paused") {
   state.reconcileJobs(workspace, ["publication-race"]);
 } else if (mode.startsWith("race-")) {
   announce({ waiting: true });

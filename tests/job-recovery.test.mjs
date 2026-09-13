@@ -148,3 +148,26 @@ test("an unchanged completed status remains readable while an unrelated writer h
   assert.equal(buildStatusSnapshot(workspace).latestFinished.status, "completed");
   assert.equal(fs.readFileSync(lock, "utf8"), "");
 });
+
+test("reconciliation surfaces corrupt job files and permission failures", (t) => {
+  const { workspace, seed } = fixture(t);
+  const job = seed("unreadable");
+  const file = resolveJobFile(workspace, job.id);
+  const indexBefore = fs.readFileSync(resolveStateFile(workspace), "utf8");
+  fs.writeFileSync(file, "{corrupt");
+  assert.throws(() => buildStatusSnapshot(workspace), SyntaxError);
+  assert.equal(fs.readFileSync(file, "utf8"), "{corrupt");
+  writeJobFile(workspace, job.id, job);
+  const read = fs.readFileSync;
+  const mocked = t.mock.method(fs, "readFileSync", (target, ...args) => {
+    if (target === file) throw Object.assign(new Error("denied"), { code: "EACCES" });
+    return read(target, ...args);
+  });
+  try {
+    assert.throws(() => buildStatusSnapshot(workspace), { code: "EACCES" });
+  } finally {
+    mocked.mock.restore();
+  }
+  assert.deepEqual(readJobFile(file), job);
+  assert.equal(fs.readFileSync(resolveStateFile(workspace), "utf8"), indexBefore);
+});
