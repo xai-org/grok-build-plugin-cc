@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -117,9 +116,17 @@ test("dead recovery uses terminal claims and retains logs, session and result me
 
 test("status reconciles only the requested session, and an explicit reference can recover another", (t) => {
   const { workspace, seed } = fixture(t);
-  const exited = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
-  assert.equal(exited.status, 0);
-  const pids = { bridgePid: exited.pid, agentPid: exited.pid };
+  // Session routing needs stable dead-owner evidence. A real exited PID can
+  // be reused while the fixture writes its jobs. Native death and live-orphan
+  // behavior are exercised separately by crash-recovery.test.mjs.
+  const pids = { bridgePid: process.pid + 1, agentPid: process.pid + 2 };
+  const kill = process.kill.bind(process);
+  t.mock.method(process, "kill", (pid, signal) => {
+    if (signal === 0 && [pids.bridgePid, pids.agentPid].includes(pid)) {
+      throw Object.assign(new Error("fixture owner has exited"), { code: "ESRCH" });
+    }
+    return kill(pid, signal);
+  });
   seed("session-a-job", { ...pids, sessionId: "session-a" });
   seed("session-b-job", { ...pids, sessionId: "session-b" });
   const otherBefore = fs.readFileSync(resolveJobFile(workspace, "session-b-job"), "utf8");

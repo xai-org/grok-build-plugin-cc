@@ -66,6 +66,11 @@ function tryRecoverLock(lockPath) {
     return `Recovered lock from exited process ${owner.pid}.`;
   } catch (error) {
     if (error?.code === "ENOENT") return "Lock ownership changed.";
+    if (["EPERM", "EACCES", "ENOTDIR"].includes(error?.code)) {
+      // Windows can deny a read while a lock is being retired or published.
+      // Retry without removing anything whose owner could not be inspected.
+      return `Lock ownership cannot be verified (${error.code}).`;
+    }
     throw error;
   }
 }
@@ -75,6 +80,7 @@ export function withStateFileLock(lockPath, fn) {
   const ownerName = `owner-${token}.json`;
   const candidatePath = fs.mkdtempSync(`${lockPath}.pending-`);
   let acquired = false;
+  let reserved = false;
   let detail = "";
   const deadline = performance.now() + LOCK_MAX_ATTEMPTS * LOCK_RETRY_MS;
   try {
@@ -84,12 +90,25 @@ export function withStateFileLock(lockPath, fn) {
 
     for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt += 1) {
       try {
+        if (process.platform === "win32") {
+          // Windows can rename a directory over a file. Reserve the name with
+          // complete metadata first; link creation never replaces an existing
+          // file or directory. Recovery leaves this file intact if we die
+          // before promotion, since another process cannot safely unlink it
+          // conditionally. That rare interval requires the offline repair below.
+          fs.linkSync(path.join(candidatePath, ownerName), lockPath);
+          reserved = true;
+        }
         // Publish complete ownership atomically. A nonempty existing directory
         // cannot be replaced, so there is no ownerless acquisition window.
         fs.renameSync(candidatePath, lockPath);
         acquired = true;
         return fn();
       } catch (error) {
+        if (reserved && !acquired) {
+          throw new Error(`Could not promote the reserved state lock at ${lockPath}. ` +
+            "For manual repair, stop all bridge, worker and Grok processes using this workspace before moving the lock aside. Keep state.json and jobs intact.", { cause: error });
+        }
         if (acquired || !CONTENDED_ERRORS.has(error?.code)) throw error;
         detail = tryRecoverLock(lockPath);
         if (performance.now() >= deadline) break;

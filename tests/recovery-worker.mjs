@@ -43,12 +43,15 @@ if (mode === "status-pruned") {
     }
     return unlink(file);
   };
-  fs.renameSync = (from, to) => {
-    try { return rename(from, to); } catch (error) {
+  const link = fs.linkSync;
+  const observeContention = (operation) => (from, to) => {
+    try { return operation(from, to); } catch (error) {
       if (observedDeadOwner && to === lockPath) fs.writeFileSync(`${ready}.contended`, "yes");
       throw error;
     }
   };
+  fs.renameSync = observeContention(rename);
+  fs.linkSync = observeContention(link);
 } else if (mode === "empty-retired") {
   const rmdir = fs.rmdirSync;
   fs.rmdirSync = (file, ...args) => {
@@ -68,10 +71,23 @@ if (mode === "status-pruned") {
     }
     return write(file, ...args);
   };
-} else if (["before-publication", "after-publication", "terminal-write", "reconcile-paused"].includes(mode)) {
+} else if (["before-publication", "after-publication", "after-reservation", "terminal-write", "reconcile-paused"].includes(mode)) {
   const rename = fs.renameSync;
-  fs.renameSync = (from, to) => {
+  const link = fs.linkSync;
+  fs.linkSync = (from, to) => {
     if (["before-publication", "reconcile-paused"].includes(mode) && to === lockPath) {
+      announce({ beforePublication: true });
+      waitUntilReleased(release);
+    }
+    const result = link(from, to);
+    if (mode === "after-reservation" && to === lockPath) {
+      announce({ reserved: true });
+      waitUntilReleased(release);
+    }
+    return result;
+  };
+  fs.renameSync = (from, to) => {
+    if (process.platform !== "win32" && ["before-publication", "reconcile-paused"].includes(mode) && to === lockPath) {
       announce({ beforePublication: true });
       waitUntilReleased(release);
     }
@@ -102,7 +118,7 @@ if (mode === "status-pruned") {
     fs.writeFileSync(`${ready}.acquired`, "yes");
     waitUntilReleased(`${release}.held`);
   });
-} else if (["hold", "empty-retired", "during-metadata", "before-publication", "after-publication"].includes(mode)) {
+} else if (["hold", "empty-retired", "during-metadata", "before-publication", "after-publication", "after-reservation"].includes(mode)) {
   withStateLock(workspace, () => {
     announce({ pid: process.pid, held: true });
     waitUntilReleased(release);

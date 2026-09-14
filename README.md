@@ -174,6 +174,14 @@ owner marker is prepared before the directory is published. An exited owner's
 marker can be removed safely; a delayed recovery attempt cannot remove a new
 owner's marker. There is no heartbeat or age based lock expiry.
 
+On Windows, publication first reserves the lock name with a hard link to the
+complete owner marker. This prevents Windows directory rename semantics from
+replacing a legacy lock file. The state filesystem must support hard links.
+A crash between reservation and directory publication leaves a metadata file
+at the lock path. It stays protected and requires the same offline repair as a
+legacy lock; automatic recovery resumes once ownership is published as a
+directory. A failed publication also reports this repair path.
+
 Older zero byte lock files and unrecognized lock metadata require manual repair.
 The timeout names the exact lock path. Stop all bridge, worker and Grok processes
 using that workspace, then move only that lock aside before restarting. Keep

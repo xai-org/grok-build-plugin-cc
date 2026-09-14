@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadState, patchJobIfActive, readJobFile, resolveJobFile, resolveStateDir, updateState, upsertJob, withStateLock, writeJobFile } from "../plugins/grok-build/scripts/lib/state.mjs";
 
@@ -66,9 +66,12 @@ function setup(t) {
     return { child, ready, release };
   }
   function cli(...args) {
-    return spawnSync(process.execPath, [SCRIPT, ...args], {
-      cwd: workspace, env, encoding: "utf8", timeout: 10000
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+      cwd: workspace, env, encoding: "utf8", timeout: args[0] === "run" ? 30000 : 10000
     });
+    result.elapsedMs = Date.now() - started;
+    return result;
   }
   return { root, workspace, env, worker, cli, detachedPids };
 }
@@ -121,9 +124,23 @@ if (args.includes("version") || args.includes("--version")) {
 `, { mode: 0o755 });
   fixture.env.GROK_BINARY = fakeScript;
   if (process.platform === "win32") {
-    const shim = path.join(fixture.root, "fake-grok.cmd");
-    fs.writeFileSync(shim, `@"${process.execPath}" "${fakeScript}" %*\r\n`);
-    fixture.env.GROK_BINARY = shim;
+    // Teach only this fixture how to launch its JavaScript fake executable.
+    // Detach the fake agent so Windows keeps it alive when its bridge exits.
+    // Native children still provide the PIDs, signals and handshakes; production
+    // .cmd/PATH support is a separate Windows integration concern.
+    const preload = path.join(fixture.root, "launch-fake.mjs");
+    fs.writeFileSync(preload, `
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+for (const method of ["spawn", "spawnSync"]) {
+  const original = childProcess[method];
+  childProcess[method] = (binary, args, options) => binary === ${JSON.stringify(fakeScript)}
+    ? original(process.execPath, [binary, ...args], { ...options, shell: false, detached: method === "spawn" })
+    : original(binary, args, options);
+}
+syncBuiltinESMExports();
+`);
+    fixture.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
   }
   const launched = fixture.cli("run", "--background", "--json", "local crash recovery fixture");
   assert.equal(launched.status, 0, launched.stderr);
@@ -168,7 +185,8 @@ if (args.includes("version") || args.includes("--version")) {
   fs.writeFileSync(fakeRelease, "release");
   assert.ok(recovered.threadId, "interrupted session remains resumable");
   const next = fixture.cli("run", "--resume-last", "--json");
-  assert.equal(next.status, 0, next.stderr);
+  assert.equal(next.status, 0, next.error?.message || next.stderr);
+  t.diagnostic(`resume completed in ${next.elapsedMs} ms`);
   const fresh = fixture.cli("run", "--fresh", "--json", "another local fake task");
   assert.equal(fresh.status, 0, fresh.stderr);
   assert.equal(fixture.cli("show", jobId, "--json").status, 0);
@@ -253,6 +271,56 @@ test("legacy lock files remain intact and have an explicit offline repair diagno
     withStateLock(workspace, () => {});
     fs.unlinkSync(`${lock}.saved`);
   }
+});
+
+test("unreadable lock ownership stays protected and a readable retry can recover", async (t) => {
+  const fixture = setup(t);
+  const owner = fixture.worker("hold", "owner");
+  await waitFor(() => readReady(owner.ready), "lock publication");
+  owner.child.kill("SIGKILL");
+  await owner.child.closed;
+  const lock = path.join(resolveStateDir(fixture.workspace), "state.json.lock");
+  const marker = path.join(lock, fs.readdirSync(lock)[0]);
+  const metadata = fs.readFileSync(marker, "utf8");
+  const read = fs.readFileSync;
+  for (const code of ["EPERM", "EACCES"]) {
+    const denied = t.mock.method(fs, "readFileSync", (file, ...args) => {
+      if (file === marker) throw Object.assign(new Error("owner metadata unavailable"), { code });
+      return read(file, ...args);
+    });
+    try {
+      assert.throws(() => withStateLock(fixture.workspace, () => assert.fail("unverified owner removed")),
+        new RegExp(`Timed out acquiring state lock.*ownership cannot be verified \\(${code}\\)`));
+    } finally {
+      denied.mock.restore();
+    }
+    assert.equal(fs.readFileSync(marker, "utf8"), metadata);
+  }
+  let attempts = 0;
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    if (file === marker && attempts++ === 0) throw Object.assign(new Error("transient read denial"), { code: "EPERM" });
+    return read(file, ...args);
+  });
+  let entered = false;
+  withStateLock(fixture.workspace, () => { entered = true; });
+  assert.equal(entered, true);
+  assert.ok(attempts > 1);
+});
+
+test("Windows publication reservations survive a crash and require offline repair", { skip: process.platform !== "win32" }, async (t) => {
+  const fixture = setup(t);
+  const owner = fixture.worker("after-reservation", "owner");
+  await waitFor(() => readReady(owner.ready)?.reserved, "exclusive Windows reservation");
+  owner.child.kill("SIGKILL");
+  await owner.child.closed;
+  const lock = path.join(resolveStateDir(fixture.workspace), "state.json.lock");
+  const content = fs.readFileSync(lock, "utf8");
+  assert.equal(JSON.parse(content).pid, owner.child.pid);
+  assert.throws(() => withStateLock(fixture.workspace, () => assert.fail("reservation stolen")), /manual repair.*stop all bridge/);
+  assert.equal(fs.readFileSync(lock, "utf8"), content);
+  fs.renameSync(lock, `${lock}.saved`);
+  withStateLock(fixture.workspace, () => {});
+  fs.unlinkSync(`${lock}.saved`);
 });
 
 test("a stale reaper cannot delete the replacement owner's lock", async (t) => {
