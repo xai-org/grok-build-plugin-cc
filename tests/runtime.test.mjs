@@ -272,6 +272,80 @@ test("runs and show surface the latest finished run", () => {
   assert.match(result.stdout, /Handled the requested task|Grok session ID|Run:/);
 });
 
+function writeRunningJob(repo, pluginDataDir, summary) {
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const jobId = generateJobId("run");
+    const jobsDir = path.join(resolveStateDir(repo), "jobs");
+    fs.mkdirSync(jobsDir, { recursive: true });
+    const logFile = path.join(jobsDir, `${jobId}.log`);
+    fs.writeFileSync(logFile, "", "utf8");
+    const job = {
+      id: jobId,
+      kind: "task",
+      kindLabel: "delegate",
+      title: "Grok Build Delegate",
+      workspaceRoot: repo,
+      jobClass: "task",
+      summary,
+      status: "running",
+      phase: "running",
+      logFile,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    writeJobFile(repo, jobId, job);
+    upsertJob(repo, job);
+    return jobId;
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+}
+
+test("runs --wait --timeout-ms 0 checks once instead of waiting the default four minutes", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+  const jobId = writeRunningJob(repo, pluginDataDir, "still running");
+
+  const startedAt = Date.now();
+  const result = run("node", [SCRIPT, "runs", jobId, "--wait", "--timeout-ms", "0", "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.timeoutMs, 0);
+  assert.equal(payload.waitTimedOut, true);
+  assert.ok(elapsedMs < 10_000, `--timeout-ms 0 took ${elapsedMs}ms`);
+});
+
+test("runs --wait rejects a non-numeric --timeout-ms instead of using the default", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+  const jobId = writeRunningJob(repo, pluginDataDir, "still running");
+
+  const result = run("node", [SCRIPT, "runs", jobId, "--wait", "--timeout-ms", "soon"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}${result.stdout}`, /--timeout-ms must be a non-negative number/);
+});
+
 function processAlive(pid) {
   try {
     process.kill(pid, 0);
