@@ -100,7 +100,17 @@ export function detectDefaultBranch(cwd) {
   if (symbolic.status === 0) {
     const remoteHead = symbolic.stdout.trim();
     if (remoteHead.startsWith("refs/remotes/origin/")) {
-      return remoteHead.replace("refs/remotes/origin/", "");
+      // origin/HEAD names the remote default branch, but the bare name only
+      // resolves when a local branch of that name exists (for example not
+      // after `git clone --branch <feature>`). Use the remote-tracking ref
+      // then, and fall through when origin/HEAD points at a deleted branch.
+      const name = remoteHead.slice("refs/remotes/origin/".length);
+      if (git(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).status === 0) {
+        return name;
+      }
+      if (git(cwd, ["show-ref", "--verify", "--quiet", remoteHead]).status === 0) {
+        return `origin/${name}`;
+      }
     }
   }
 
