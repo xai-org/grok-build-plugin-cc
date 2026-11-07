@@ -8,8 +8,19 @@ export function makeTempDir(prefix = "grok-build-plugin-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-export function writeExecutable(filePath, source) {
+export function writeExecutable(filePath, source, options = {}) {
   fs.writeFileSync(filePath, source, { encoding: "utf8", mode: 0o755 });
+
+  // Windows resolves a bare command name through PATHEXT, which never matches
+  // an extensionless file, so the script stays invisible on PATH and the real
+  // binary is found instead. Write a .cmd shim beside it, the way npm ships
+  // npm and npm.cmd. Callers must keep spawning the bare name: spawn rejects a
+  // literal .bat/.cmd path unless shell is set (CVE-2024-27980). The shim
+  // spells out the script path rather than deriving it from %~dp0, so reading
+  // the shim tells you what it runs without expanding anything.
+  if ((options.platform ?? process.platform) === "win32") {
+    fs.writeFileSync(`${filePath}.cmd`, `@echo off\r\nnode "${filePath}" %*\r\n`, { encoding: "utf8" });
+  }
 }
 
 export function run(command, args, options = {}) {
