@@ -23,11 +23,51 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function isLineForVar(name, line) {
+  const trimmed = line.trim();
+  return trimmed.startsWith(`export ${name}=`) || trimmed.startsWith(`${name}=`);
+}
+
 function appendEnvVar(name, value) {
-  if (!process.env.CLAUDE_ENV_FILE || value == null || value === "") {
+  const file = process.env.CLAUDE_ENV_FILE;
+  if (!file || value == null || value === "") {
     return;
   }
-  fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
+
+  // Rewrite this variable rather than append. SessionStart also fires on resume
+  // and compaction; Claude Code inlines CLAUDE_ENV_FILE into every bash -c, and
+  // on Windows MSYS2 silently truncates that argument past 8186 characters.
+  const line = `export ${name}=${shellEscape(value)}\n`;
+
+  let existing = "";
+  try {
+    existing = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    // Only a missing file is empty. Any other read error must abort: the write
+    // below replaces the whole file, and handleSessionStart runs three of these
+    // back to back.
+    if (error?.code !== "ENOENT") {
+      return;
+    }
+  }
+
+  // Split so every line keeps its own terminator instead of having one imposed on
+  // it. CLAUDE_ENV_FILE is shared, and reformatting content another hook wrote is a
+  // quieter version of the problem this function exists to fix: splitting on
+  // /\r?\n/ and joining with \n silently rewrites a foreign CRLF line as LF, and
+  // filtering blank entries would delete blank lines somebody else put there.
+  // Carrying the terminators through leaves both alone without a special case.
+  const kept = (existing.match(/[^\n]*\n|[^\n]+/g) ?? []).filter(
+    (entry) => !isLineForVar(name, entry)
+  );
+
+  // Only the final line can lack a terminator, and appending after it would splice
+  // the two together.
+  let head = kept.join("");
+  if (head.length > 0 && !head.endsWith("\n")) {
+    head += "\n";
+  }
+  fs.writeFileSync(file, head + line, "utf8");
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
