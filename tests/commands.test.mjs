@@ -67,7 +67,7 @@ test("plugin surfaces use /grok-build names and grok binary, not codex", () => {
   assert.match(review, /The bridge script parses `--wait` and `--background`/);
   assert.match(review, /\(Recommended\)/);
   assert.match(review, /--model <model>/);
-  assert.match(review, /--effort <low\|medium\|high>/);
+  assert.match(review, /--effort <low\|medium\|high\|xhigh>/);
 
   const critique = read("commands/critique.md");
   assert.match(critique, /\/grok-build:critique/);
@@ -75,7 +75,7 @@ test("plugin surfaces use /grok-build names and grok binary, not codex", () => {
   assert.match(critique, /uses the same review target selection as `\/grok-build:review`/i);
   assert.match(critique, /can still take extra focus text after the flags/i);
   assert.match(critique, /--model <model>/);
-  assert.match(critique, /--effort <low\|medium\|high>/);
+  assert.match(critique, /--effort <low\|medium\|high\|xhigh>/);
 
   const delegate = read("commands/delegate.md");
   assert.match(delegate, /subagent_type: "grok-build:grok-delegate"/);

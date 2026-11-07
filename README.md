@@ -76,7 +76,7 @@ Runs:
 grok -p <prompt> --agent explore --permission-mode plan --sandbox read-only --cwd <ws> --output-format plain
 ```
 
-Optional: pass `--model` / `--effort` (`low`|`medium`|`high`). If omitted, Grok chooses defaults.
+Optional: pass `--model` / `--effort` (`low`|`medium`|`high`|`xhigh`). If omitted, Grok chooses defaults.
 
 ### `/grok-build:critique`
 
