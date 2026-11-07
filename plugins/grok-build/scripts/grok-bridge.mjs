@@ -1094,8 +1094,19 @@ async function main() {
   }
 }
 
+// Node reports import.meta.url at the real path, but argv[1] keeps a symlinked or junctioned
+// plugin root, so compare both after resolving links.
+function resolveEntrypoint(candidate) {
+  try {
+    return fs.realpathSync(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
 const isMain =
-  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] &&
+  resolveEntrypoint(process.argv[1]) === resolveEntrypoint(fileURLToPath(import.meta.url));
 
 if (isMain) {
   main().catch((error) => {
