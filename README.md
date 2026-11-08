@@ -122,7 +122,7 @@ Import the current Claude transcript into Grok:
 /grok-build:import --source ~/.claude/projects/.../session.jsonl
 ```
 
-Uses `grok import` and prints a resume hint: `grok -r <id>`.
+Uses `grok import` and prints a resume hint: `grok -r <id>`. Sessions are read from `~/.claude/projects`, or from `$CLAUDE_CONFIG_DIR/projects` when Claude Code runs with `CLAUDE_CONFIG_DIR` set.
 
 ### `/grok-build:runs`
 

@@ -484,6 +484,86 @@ test("import uses grok import and prints resume hint", () => {
   assert.equal(payload.resumeCommand, "grok -r 11111111-2222-4333-8444-555555555555");
 });
 
+function writeClaudeSession(projectsDir, name = "sess-transfer.jsonl") {
+  const dir = path.join(projectsDir, "demo");
+  fs.mkdirSync(dir, { recursive: true });
+  const sessionPath = path.join(dir, name);
+  fs.writeFileSync(sessionPath, '{"type":"user","text":"hi"}\n', "utf8");
+  return sessionPath;
+}
+
+function runImport(sessionPath, { home, configDir }) {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+  return run("node", [SCRIPT, "import", "--source", sessionPath, "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, {
+      HOME: home,
+      USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: configDir ?? ""
+    })
+  });
+}
+
+test("import accepts a session under CLAUDE_CONFIG_DIR/projects", () => {
+  const home = makeTempDir();
+  const configDir = makeTempDir();
+  const sessionPath = writeClaudeSession(path.join(configDir, "projects"));
+
+  const result = runImport(sessionPath, { home, configDir });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(JSON.parse(result.stdout).threadId, "11111111-2222-4333-8444-555555555555");
+});
+
+test("import expands a ~/ CLAUDE_CONFIG_DIR against the home directory", () => {
+  const home = makeTempDir();
+  const sessionPath = writeClaudeSession(path.join(home, ".claude-work", "projects"));
+
+  const result = runImport(sessionPath, { home, configDir: "~/.claude-work" });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+});
+
+test("import follows a symlinked CLAUDE_CONFIG_DIR", { skip: process.platform === "win32" }, () => {
+  const home = makeTempDir();
+  const realConfig = makeTempDir();
+  const sessionPath = writeClaudeSession(path.join(realConfig, "projects"));
+  const linkedConfig = path.join(makeTempDir(), "claude-link");
+  fs.symlinkSync(realConfig, linkedConfig, "dir");
+
+  const result = runImport(sessionPath, { home, configDir: linkedConfig });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+});
+
+test("import still accepts ~/.claude/projects when CLAUDE_CONFIG_DIR points elsewhere", () => {
+  const home = makeTempDir();
+  const sessionPath = writeClaudeSession(path.join(home, ".claude", "projects"));
+
+  const result = runImport(sessionPath, { home, configDir: path.join(makeTempDir(), "missing") });
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+});
+
+test("import refuses a session outside both Claude project roots and names them", () => {
+  const home = makeTempDir();
+  const configDir = makeTempDir();
+  fs.mkdirSync(path.join(home, ".claude", "projects"), { recursive: true });
+  fs.mkdirSync(path.join(configDir, "projects"), { recursive: true });
+  const sessionPath = writeClaudeSession(path.join(makeTempDir(), "elsewhere"));
+
+  const result = runImport(sessionPath, { home, configDir });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /only from/);
+  assert.ok(result.stderr.includes(path.join(configDir, "projects")), result.stderr);
+  assert.ok(result.stderr.includes(path.join(home, ".claude", "projects")), result.stderr);
+});
+
 test("run-resume-candidate reports available after a completed run with thread id", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

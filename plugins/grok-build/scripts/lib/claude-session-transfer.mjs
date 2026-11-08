@@ -5,7 +5,18 @@ import path from "node:path";
 import { ensureAbsolutePath } from "./fs.mjs";
 
 export const TRANSCRIPT_PATH_ENV = "GROK_CC_TRANSCRIPT_PATH";
-const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+
+// Claude Code keeps transcripts under `<config dir>/projects`, where the config
+// dir is `$CLAUDE_CONFIG_DIR` when set and `~/.claude` otherwise. Both roots are
+// accepted so a session saved before the variable was set can still be imported.
+function claudeProjectsDirs() {
+  const dirs = [path.join(os.homedir(), ".claude", "projects")];
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  if (configDir) {
+    dirs.unshift(path.join(resolveUserPath(process.cwd(), configDir), "projects"));
+  }
+  return [...new Set(dirs)];
+}
 
 function resolveUserPath(cwd, value) {
   if (value === "~") {
@@ -29,16 +40,23 @@ export function resolveClaudeSessionPath(cwd, options = {}) {
   }
 
   let source;
-  let projects;
   try {
     source = fs.realpathSync(sourcePath);
-    projects = fs.realpathSync(CLAUDE_PROJECTS_DIR);
   } catch {
     throw new Error(`Claude session file not found: ${sourcePath}`);
   }
-  const relative = path.relative(projects, source);
-  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`Grok can import Claude sessions only from ${CLAUDE_PROJECTS_DIR}: ${source}`);
+  const allowed = claudeProjectsDirs();
+  for (const dir of allowed) {
+    let projects;
+    try {
+      projects = fs.realpathSync(dir);
+    } catch {
+      continue;
+    }
+    const relative = path.relative(projects, source);
+    if (relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      return source;
+    }
   }
-  return source;
+  throw new Error(`Grok can import Claude sessions only from ${allowed.join(" or ")}: ${source}`);
 }
