@@ -19,4 +19,4 @@ If Grok is already installed:
 
 Output rules:
 - Present the final check output to the user.
-- If Grok is installed but not authenticated, preserve the guidance to authenticate (for example complete login via interactive `grok`, then verify with `grok models`).
+- If Grok is installed but not authenticated, preserve the guidance to authenticate (for example complete login via interactive `grok`, then verify that the first line of `grok models` no longer reads `You are not authenticated.`; it exits 0 either way).

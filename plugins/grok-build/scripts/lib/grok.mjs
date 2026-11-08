@@ -13,6 +13,16 @@ export const DEFAULT_CONTINUE_PROMPT =
 const DEFAULT_BINARY = "grok";
 const BINARY_ENV = "GROK_BINARY";
 
+// First lines of `grok models` (xai-grok-pager src/models.rs,
+// list_available_models), which prints exactly one of these.
+const MODELS_UNAUTHENTICATED_BANNER = /^You are not authenticated\.$/;
+const MODELS_AUTH_BANNERS = [
+  { pattern: /^You are using XAI_API_KEY\.$/, authMethod: "xai-api-key" },
+  { pattern: /^You are logged in with .+\.$/, authMethod: "grok-cli" },
+  { pattern: /^Model '.+' is using its own API key\.$/, authMethod: "model-api-key" },
+  { pattern: /^You are authenticated via deployment key\.$/, authMethod: "deployment-key" }
+];
+
 export function resolveGrokBinary(env = process.env) {
   const override = env?.[BINARY_ENV];
   if (override && String(override).trim()) {
@@ -105,17 +115,33 @@ export function runModelsProbe(cwd, options = {}) {
     });
   }
 
+  // `grok models` exits 0 whether or not the CLI is authenticated, and prints the
+  // model roster in both states, so exit status and the presence of "available
+  // models" cannot distinguish them. Its first line is an auth banner instead:
+  // MODELS_UNAUTHENTICATED_BANNER or one of MODELS_AUTH_BANNERS. Match only that
+  // line, and only whole, so roster lines or appended wording cannot decide it.
   const stdout = (result.stdout || "").trim();
-  const loggedInHint = /logged in|available models|default model/i.test(stdout);
+  const banner = firstLine(stdout) ?? "";
+  if (MODELS_UNAUTHENTICATED_BANNER.test(banner)) {
+    return buildAuthStatus({
+      available: true,
+      loggedIn: false,
+      detail: banner,
+      source: "models-probe",
+      verified: false
+    });
+  }
+
+  const known = MODELS_AUTH_BANNERS.find(({ pattern }) => pattern.test(banner));
+  // An unrecognized banner (future CLI wording) must not block the gate: report
+  // logged in, but unverified.
   return buildAuthStatus({
     available: true,
     loggedIn: true,
-    detail: loggedInHint
-      ? firstLine(stdout) || "grok models succeeded"
-      : firstLine(stdout) || "grok models succeeded (treated as logged in)",
+    detail: banner || "grok models succeeded",
     source: "models-probe",
-    authMethod: "grok-cli",
-    verified: true
+    authMethod: known?.authMethod ?? null,
+    verified: Boolean(known)
   });
 }
 

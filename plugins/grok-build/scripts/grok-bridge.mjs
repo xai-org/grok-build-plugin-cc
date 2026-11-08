@@ -187,7 +187,7 @@ async function buildCheckReport(cwd, actionsTaken = []) {
   }
   if (grokStatus.available && !authStatus.loggedIn) {
     nextSteps.push("Authenticate the Grok CLI (for example by running `grok` interactively and completing login).");
-    nextSteps.push("Verify with `grok models` — a successful run means you are logged in.");
+    nextSteps.push("Verify with `grok models`: its first line should not read `You are not authenticated.` (it exits 0 either way).");
   }
 
   return {

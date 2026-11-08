@@ -79,6 +79,44 @@ test("check reports not ready when models probe fails", () => {
   assert.ok(payload.nextSteps.length > 0);
 });
 
+test("check reports not ready when models exits 0 but reports not authenticated", () => {
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir, "not-authenticated");
+
+  const result = run("node", [SCRIPT, "check", "--json"], {
+    cwd: ROOT,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.auth.loggedIn, false);
+  assert.match(payload.auth.detail, /not authenticated/i);
+  assert.ok(payload.nextSteps.length > 0);
+});
+
+test("check stays ready but unverified on an unrecognized models banner", () => {
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+
+  const result = run("node", [SCRIPT, "check", "--json"], {
+    cwd: ROOT,
+    env: pluginDataEnv(pluginDataDir, binDir, {
+      FAKE_GROK_MODELS_BANNER: "Signed in through some future method."
+    })
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.auth.loggedIn, true);
+  assert.equal(payload.auth.verified, false);
+  assert.equal(payload.auth.authMethod, null);
+});
+
 test("check ignores legacy review-gate flags as unknown options", () => {
   const binDir = makeTempDir();
   const pluginDataDir = makeTempDir();

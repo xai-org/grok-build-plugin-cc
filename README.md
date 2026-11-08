@@ -8,7 +8,7 @@ This repository is a Claude Code marketplace plugin that shells out to the real 
 
 - Node.js `>= 18.18`
 - Grok Build CLI (`grok`) on `PATH`, or set `GROK_BINARY`
-- A logged-in Grok CLI session (`grok models` succeeds)
+- An authenticated Grok CLI (the first line of `grok models` is not `You are not authenticated.`)
 
 ## Install
 
@@ -51,7 +51,9 @@ Or, when Claude Code is already open, use `/plugin` and add the local marketplac
 /grok-build:check
 ```
 
-Ready means: Node is available, `grok` is available, and soft auth via `grok models` succeeds.
+Ready means: Node is available, `grok` is available, and `grok models` does not report `You are not authenticated.` (it exits 0 whether or not you are logged in, so the plugin reads its first line).
+
+`auth.authMethod` names the method that banner reports: `xai-api-key`, `grok-cli` (logged in with a host), `model-api-key`, or `deployment-key`. If a future CLI prints a banner the plugin does not recognize, `check` still reports ready, with `auth.verified: false` and `auth.authMethod: null`.
 
 ## Commands
 

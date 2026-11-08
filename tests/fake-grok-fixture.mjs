@@ -7,7 +7,7 @@ import { writeExecutable } from "./helpers.mjs";
 /**
  * Install a fake `grok` binary that responds to version/models/-p/import for hermetic tests.
  * @param {string} binDir directory that will be prepended to PATH
- * @param {"default"|"not-logged-in"|"fail-print"|"import-ok"} scenario
+ * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"} scenario
  */
 export function installFakeGrok(binDir, scenario = "default") {
   fs.mkdirSync(binDir, { recursive: true });
@@ -52,7 +52,14 @@ if (argv[0] === "models") {
     process.stderr.write("Not logged in. Run grok interactively to authenticate.\\n");
     process.exit(1);
   }
-  process.stdout.write("You are logged in with grok.com.\\n\\nDefault model: fake-model\\n\\nAvailable models:\\n  - fake-model\\n");
+  if (scenario === "not-authenticated") {
+    // Mirrors the real CLI (1.0.3 through at least 1.0.25): exits 0 and still prints the roster when logged out.
+    process.stdout.write("You are not authenticated.\\n\\nDefault model: fake-model\\n\\nAvailable models:\\n  - fake-model\\n");
+    process.exit(0);
+  }
+  // FAKE_GROK_MODELS_BANNER overrides the auth banner, to exercise each auth state.
+  const banner = process.env.FAKE_GROK_MODELS_BANNER ?? "You are logged in with grok.com.";
+  process.stdout.write(banner + "\\n\\nDefault model: fake-model\\n\\nAvailable models:\\n  - fake-model\\n");
   process.exit(0);
 }
 
