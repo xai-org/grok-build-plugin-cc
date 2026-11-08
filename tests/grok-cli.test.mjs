@@ -6,10 +6,14 @@ import { buildEnv, installFakeGrok } from "./fake-grok-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
 import {
   buildReviewPrompt,
+  DEFAULT_IDLE_TIMEOUT_MS,
+  formatIdleDuration,
   getGrokAuthStatus,
   getGrokAvailability,
+  IDLE_TIMEOUT_ENV,
   parseStructuredOutput,
   resolveGrokBinary,
+  resolveIdleTimeoutMs,
   runHeadlessAgent,
   runImport
 } from "../plugins/grok-build/scripts/lib/grok.mjs";
@@ -122,6 +126,83 @@ test("runHeadlessAgent reports agentPid from the spawned child", async () => {
   assert.equal(typeof result.agentPid, "number");
   assert.ok(result.agentPid > 0);
   assert.ok(progressEvents.some((event) => event?.agentPid === result.agentPid));
+});
+
+test("resolveIdleTimeoutMs prefers the option, then the env, then the default", () => {
+  assert.equal(resolveIdleTimeoutMs(undefined, {}), DEFAULT_IDLE_TIMEOUT_MS);
+  assert.equal(resolveIdleTimeoutMs(undefined, { [IDLE_TIMEOUT_ENV]: "120000" }), 120000);
+  assert.equal(resolveIdleTimeoutMs(5000, { [IDLE_TIMEOUT_ENV]: "120000" }), 5000);
+  assert.equal(resolveIdleTimeoutMs(0, { [IDLE_TIMEOUT_ENV]: "120000" }), 0);
+  assert.equal(resolveIdleTimeoutMs(undefined, { [IDLE_TIMEOUT_ENV]: "0" }), 0);
+  assert.equal(resolveIdleTimeoutMs(undefined, { [IDLE_TIMEOUT_ENV]: "-5" }), 0);
+  assert.equal(resolveIdleTimeoutMs(undefined, { [IDLE_TIMEOUT_ENV]: "soon" }), 0);
+  assert.equal(resolveIdleTimeoutMs("2500.9", {}), 2500);
+});
+
+test("formatIdleDuration renders seconds and minutes", () => {
+  assert.equal(formatIdleDuration(45_000), "45s");
+  assert.equal(formatIdleDuration(60_000), "1m");
+  assert.equal(formatIdleDuration(15 * 60_000), "15m");
+  assert.equal(formatIdleDuration(90_000), "1m 30s");
+});
+
+test("runHeadlessAgent terminates a silent grok process as stalled and keeps its output", async () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir, "hang-print");
+  const env = buildEnv(binDir);
+  const cwd = makeTempDir();
+  const progressEvents = [];
+
+  const startedAt = Date.now();
+  const result = await runHeadlessAgent(cwd, {
+    prompt: "finish, then get held by a hook",
+    env,
+    idleTimeoutMs: 1500,
+    onProgress: (event) => progressEvents.push(event)
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(result.stalled, true);
+  assert.equal(result.idleTimeoutMs, 1500);
+  assert.notEqual(result.status, 0);
+  assert.match(result.finalMessage, /Partial answer before the hook held the process/);
+  assert.ok(elapsedMs < 20_000, `stalled run took ${elapsedMs}ms to resolve`);
+  assert.ok(
+    progressEvents.some((event) => event?.phase === "stalled"),
+    `expected a stalled progress event, got ${JSON.stringify(progressEvents)}`
+  );
+  assert.ok(result.agentPid > 0);
+  assert.throws(() => process.kill(result.agentPid, 0), /ESRCH|EPERM/);
+});
+
+test("runHeadlessAgent leaves a normal run alone when the idle watchdog is armed", async () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir);
+  const env = buildEnv(binDir);
+  const cwd = makeTempDir();
+
+  const result = await runHeadlessAgent(cwd, {
+    prompt: "quick task",
+    env,
+    idleTimeoutMs: 10_000
+  });
+
+  assert.equal(result.stalled, false);
+  assert.equal(result.status, 0);
+  assert.match(result.finalMessage, /Handled the requested task/);
+});
+
+test("runHeadlessAgent honours an idle watchdog disabled via the environment", async () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir);
+  const env = buildEnv(binDir, { [IDLE_TIMEOUT_ENV]: "0" });
+  const cwd = makeTempDir();
+
+  const result = await runHeadlessAgent(cwd, { prompt: "quick task", env });
+
+  assert.equal(result.idleTimeoutMs, 0);
+  assert.equal(result.stalled, false);
+  assert.equal(result.status, 0);
 });
 
 test("buildReviewPrompt includes target and focus", () => {

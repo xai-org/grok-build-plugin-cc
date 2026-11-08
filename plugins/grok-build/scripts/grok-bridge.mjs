@@ -13,8 +13,10 @@ import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "
 import {
   buildReviewPrompt,
   DEFAULT_CONTINUE_PROMPT,
+  formatIdleDuration,
   getGrokAuthStatus,
   getGrokAvailability,
+  IDLE_TIMEOUT_ENV,
   parseStructuredOutput,
   readOutputSchema,
   runHeadlessAgent,
@@ -337,13 +339,17 @@ async function executeReviewRun(request) {
     effort: request.effort,
     outputFormat: structured ? "json" : "plain",
     jsonSchema: structured ? readOutputSchema(REVIEW_SCHEMA) : undefined,
+    idleTimeoutMs: request.idleTimeoutMs,
     onProgress: request.onProgress
   });
+
+  const stallNotice = result.stalled ? describeStalledRun(result) : "";
+  const stderrWithStall = stallNotice ? [stallNotice, result.stderr].filter(Boolean).join("\n\n") : result.stderr;
 
   if (structured) {
     const parsed = parseStructuredOutput(result.finalMessage, {
       status: result.status,
-      failureMessage: result.stderr
+      failureMessage: stderrWithStall
     });
     const payload = {
       review: reviewName,
@@ -356,7 +362,8 @@ async function executeReviewRun(request) {
       },
       grok: {
         status: result.status,
-        stderr: result.stderr,
+        stalled: result.stalled,
+        stderr: stderrWithStall,
         stdout: result.finalMessage
       },
       result: parsed.parsed,
@@ -366,6 +373,7 @@ async function executeReviewRun(request) {
 
     return {
       exitStatus: result.status,
+      stalled: result.stalled,
       threadId: result.threadId,
       turnId: null,
       payload,
@@ -389,7 +397,8 @@ async function executeReviewRun(request) {
     threadId: result.threadId,
     grok: {
       status: result.status,
-      stderr: result.stderr,
+      stalled: result.stalled,
+      stderr: stderrWithStall,
       stdout: result.finalMessage
     }
   };
@@ -397,13 +406,14 @@ async function executeReviewRun(request) {
     {
       status: result.status,
       stdout: result.finalMessage,
-      stderr: result.stderr
+      stderr: stderrWithStall
     },
     { reviewLabel: reviewName, targetLabel: target.label }
   );
 
   return {
     exitStatus: result.status,
+    stalled: result.stalled,
     threadId: result.threadId,
     turnId: null,
     payload,
@@ -454,12 +464,15 @@ async function executeTaskRun(request) {
     alwaysApprove: true,
     sandbox: write ? undefined : "read-only",
     outputFormat: "plain",
+    idleTimeoutMs: request.idleTimeoutMs,
     onProgress: request.onProgress
   });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
-  const failureMessage = result.status === 0 ? "" : result.stderr || "";
-  const rendered = renderTaskResult(
+  const stallNotice = result.stalled ? describeStalledRun(result) : "";
+  const failureMessage =
+    result.status === 0 ? "" : [stallNotice, result.stderr || ""].filter(Boolean).join("\n\n");
+  let rendered = renderTaskResult(
     {
       rawOutput,
       failureMessage
@@ -470,14 +483,19 @@ async function executeTaskRun(request) {
       write
     }
   );
+  if (result.stalled && rawOutput) {
+    rendered = `${stallNotice}\n\nOutput captured before the stall:\n\n${rendered}`;
+  }
   const payload = {
     status: result.status,
+    stalled: result.stalled,
     threadId: result.threadId,
     rawOutput
   };
 
   return {
     exitStatus: result.status,
+    stalled: result.stalled,
     threadId: result.threadId,
     turnId: null,
     payload,
@@ -547,7 +565,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId, idleTimeoutMs }) {
   return {
     cwd,
     model,
@@ -555,8 +573,30 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
-    jobId
+    jobId,
+    idleTimeoutMs
   };
+}
+
+function parseIdleTimeoutOption(options) {
+  const raw = options["idle-timeout-ms"];
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("--idle-timeout-ms must be a non-negative number of milliseconds (0 disables the idle watchdog).");
+  }
+  return Math.floor(parsed);
+}
+
+function describeStalledRun(result) {
+  return (
+    `Grok produced no output for ${formatIdleDuration(result.idleTimeoutMs)} while its process was still alive, ` +
+    "so the bridge terminated it as stalled. A hook in the interactive Grok profile that waits for a person " +
+    "(Stop, SubagentStop, notification) is the usual cause; see `grok inspect` for active hook sources. " +
+    `Adjust with --idle-timeout-ms or ${IDLE_TIMEOUT_ENV} (0 disables).`
+  );
 }
 
 function renderTransferResult(payload) {
@@ -677,7 +717,7 @@ export function enqueueBackgroundJob(cwd, job, request, options = {}) {
 
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "effort", "cwd"],
+    valueOptions: ["base", "scope", "model", "effort", "cwd", "idle-timeout-ms"],
     booleanOptions: ["json", "background", "wait"],
     aliasMap: {
       m: "model"
@@ -712,7 +752,8 @@ async function handleReviewCommand(argv, config) {
     model,
     effort,
     focusText,
-    reviewName: config.reviewName
+    reviewName: config.reviewName,
+    idleTimeoutMs: parseIdleTimeoutOption(options)
   };
 
   if (options.background && !options.wait) {
@@ -735,7 +776,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "idle-timeout-ms"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -754,6 +795,7 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
+  const idleTimeoutMs = parseIdleTimeoutOption(options);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -773,7 +815,8 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
-        jobId: job.id
+        jobId: job.id,
+        idleTimeoutMs
       })
     };
     const { payload } = enqueueBackgroundJob(cwd, job, request);
@@ -793,6 +836,7 @@ async function handleTask(argv) {
         write,
         resumeLast,
         jobId: job.id,
+        idleTimeoutMs,
         onProgress: progress
       }),
     { json: options.json }

@@ -5,13 +5,54 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 
 import { readJsonFile } from "./fs.mjs";
-import { binaryAvailable, runCommand } from "./process.mjs";
+import { binaryAvailable, runCommand, terminateProcessTree } from "./process.mjs";
 
 export const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 
 const DEFAULT_BINARY = "grok";
 const BINARY_ENV = "GROK_BINARY";
+
+// A headless run whose grok process stays alive without producing output is
+// treated as stalled once this much time passes. The usual cause is a Stop,
+// SubagentStop, or notification hook in the user's interactive profile that
+// waits for a person; Grok only exits (and only prints its `end` marker) after
+// that hook releases, so watching process exit alone can leave a finished run
+// `running` for as long as the hook's own timeout (#45).
+export const IDLE_TIMEOUT_ENV = "GROK_BUILD_IDLE_TIMEOUT_MS";
+export const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+// `terminateProcessTree` waits synchronously for this long between SIGTERM and SIGKILL.
+const STALL_KILL_GRACE_MS = 500;
+
+/**
+ * Resolve the idle timeout for a headless run. Explicit option wins, then the
+ * environment variable, then the default. `0`, negative, or unparsable values
+ * disable the watchdog.
+ */
+export function resolveIdleTimeoutMs(value, env = process.env) {
+  const candidates = [value, env?.[IDLE_TIMEOUT_ENV]];
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === "") {
+      continue;
+    }
+    const parsed = Number(candidate);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return parsed > 0 ? Math.floor(parsed) : 0;
+  }
+  return DEFAULT_IDLE_TIMEOUT_MS;
+}
+
+export function formatIdleDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
 
 export function resolveGrokBinary(env = process.env) {
   const override = env?.[BINARY_ENV];
@@ -219,6 +260,7 @@ export function runHeadlessAgent(cwd, options = {}) {
 
   const platform = options.platform ?? process.platform;
   const detached = options.detached ?? platform !== "win32";
+  const idleTimeoutMs = resolveIdleTimeoutMs(options.idleTimeoutMs, options.env ?? process.env);
 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
@@ -238,28 +280,78 @@ export function runHeadlessAgent(cwd, options = {}) {
 
     let stdout = "";
     let stderr = "";
+    let stalled = false;
+    let idleTimer = null;
+
+    const clearIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    const onIdle = () => {
+      idleTimer = null;
+      if (stalled || child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      stalled = true;
+      emitProgress(
+        options.onProgress,
+        `Grok produced no output for ${formatIdleDuration(idleTimeoutMs)}; terminating the run as stalled.`,
+        "stalled",
+        { threadId: sessionId, agentPid }
+      );
+      if (agentPid) {
+        try {
+          terminateProcessTree(agentPid, { platform, graceMs: STALL_KILL_GRACE_MS });
+        } catch {
+          // The close handler still runs if the kill fails; fall back to the child handle.
+          child.kill("SIGKILL");
+        }
+      } else {
+        child.kill("SIGKILL");
+      }
+    };
+
+    const armIdleTimer = () => {
+      if (idleTimeoutMs <= 0 || stalled) {
+        return;
+      }
+      clearIdleTimer();
+      idleTimer = setTimeout(onIdle, idleTimeoutMs);
+      if (typeof idleTimer.unref === "function") {
+        idleTimer.unref();
+      }
+    };
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
+      armIdleTimer();
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
+      armIdleTimer();
     });
 
     child.on("error", (error) => {
+      clearIdleTimer();
       reject(error);
     });
 
     child.on("close", (code, signal) => {
-      const status = code ?? (signal ? 1 : 0);
-      emitProgress(
-        options.onProgress,
-        status === 0 ? "Grok finished." : `Grok exited with status ${status}.`,
-        status === 0 ? "finalizing" : "failed",
-        { threadId: sessionId, agentPid }
-      );
+      clearIdleTimer();
+      const status = stalled ? (code && code !== 0 ? code : 1) : (code ?? (signal ? 1 : 0));
+      if (!stalled) {
+        emitProgress(
+          options.onProgress,
+          status === 0 ? "Grok finished." : `Grok exited with status ${status}.`,
+          status === 0 ? "finalizing" : "failed",
+          { threadId: sessionId, agentPid }
+        );
+      }
       resolve({
         status,
         signal,
@@ -269,10 +361,14 @@ export function runHeadlessAgent(cwd, options = {}) {
         threadId: sessionId,
         agentPid,
         finalMessage: stdout.trimEnd(),
+        stalled,
+        idleTimeoutMs,
         args,
         binary
       });
     });
+
+    armIdleTimer();
   });
 }
 

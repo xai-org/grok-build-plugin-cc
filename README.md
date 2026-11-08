@@ -112,6 +112,7 @@ Write policy layering:
 - Prefer bridge `--background` for long work so runs record both `bridgePid` (Node worker) and `agentPid` (grok child).
 - `/grok-build:stop` terminates **both** process trees when present (agent then bridge/worker).
 - If you do not pass `--model` or `--effort`, Grok chooses its own defaults.
+- A hook in the interactive Grok profile that waits for a person (`Stop`, `SubagentStop`, a notification hook) holds the `grok` process open after the turn is done; headless runs have nobody to answer it. The bridge ends such a run as `failed` with phase `stalled` once no output has arrived for `GROK_BUILD_IDLE_TIMEOUT_MS` (default 15 minutes, `--idle-timeout-ms` per run) and keeps the output captured so far. `grok inspect` lists active hook sources; running delegates under a dedicated `GROK_HOME` keeps interactive hooks out of them entirely.
 
 ### `/grok-build:import`
 
@@ -158,6 +159,7 @@ Kills every distinct pid among `agentPid` (detached grok child) and `bridgePid` 
 | Variable | Purpose |
 | --- | --- |
 | `GROK_BINARY` | Optional override for the `grok` executable |
+| `GROK_BUILD_IDLE_TIMEOUT_MS` | Idle watchdog for headless runs: a `grok` process that stays alive without writing any output for this long is terminated and the run ends as `failed` (phase `stalled`) with whatever it printed. Default 15 minutes; `0` disables. Per-run override: `--idle-timeout-ms` on `review`, `critique`, and `run` |
 | `GROK_CC_SESSION_ID` | Claude session id (set by SessionStart hook) |
 | `GROK_CC_TRANSCRIPT_PATH` | Claude transcript path (set by SessionStart hook) |
 | `CLAUDE_PLUGIN_ROOT` | Plugin install root (host) |

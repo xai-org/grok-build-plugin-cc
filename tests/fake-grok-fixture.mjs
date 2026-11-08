@@ -7,7 +7,7 @@ import { writeExecutable } from "./helpers.mjs";
 /**
  * Install a fake `grok` binary that responds to version/models/-p/import for hermetic tests.
  * @param {string} binDir directory that will be prepended to PATH
- * @param {"default"|"not-logged-in"|"fail-print"|"import-ok"} scenario
+ * @param {"default"|"not-logged-in"|"fail-print"|"hang-print"|"import-ok"} scenario
  */
 export function installFakeGrok(binDir, scenario = "default") {
   fs.mkdirSync(binDir, { recursive: true });
@@ -87,7 +87,13 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   const prompt = printIndex !== -1 ? (argv[printIndex + 1] ?? "") : "";
   const wantsJson = hasFlag("--json-schema") || flagValue("--output-format") === "json";
 
-  if (wantsJson || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
+  if (scenario === "hang-print") {
+    // Emulate a finished turn whose process is held open by a Stop hook that
+    // waits for a person: the final message is already written, then nothing
+    // else happens until something kills us.
+    process.stdout.write("Partial answer before the hook held the process.\\n");
+    setTimeout(() => process.exit(0), 60_000);
+  } else if (wantsJson || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
     const payload = {
       verdict: "approve",
       summary: "No material issues found in the reviewed changes.",
@@ -102,11 +108,13 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   } else {
     process.stdout.write("Handled the requested task.\\n");
   }
-  process.exit(0);
+  if (scenario !== "hang-print") {
+    process.exit(0);
+  }
+} else {
+  process.stderr.write("fake grok: unknown invocation: " + argv.join(" ") + "\\n");
+  process.exit(1);
 }
-
-process.stderr.write("fake grok: unknown invocation: " + argv.join(" ") + "\\n");
-process.exit(1);
 `;
 
   writeExecutable(scriptPath, source);

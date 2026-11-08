@@ -255,6 +255,63 @@ test("run delegates through fake grok and stores a finished job", () => {
   }
 });
 
+test("run marks a silent grok process as stalled and records the partial output", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir, "hang-print");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "run", "--json", "--idle-timeout-ms", "1500", "finish then hang"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0, "a stalled run must not report success");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.stalled, true);
+  assert.match(payload.rawOutput, /Partial answer before the hook held the process/);
+
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const jobs = listJobs(repo);
+    assert.ok(jobs.length >= 1);
+    assert.equal(jobs[0].status, "failed");
+    assert.equal(jobs[0].phase, "stalled");
+    const stored = readStoredJobFromDisk(repo, jobs[0].id);
+    assert.ok(stored, "job file should exist");
+    assert.equal(stored.result?.stalled, true);
+    assert.match(stored.rendered ?? "", /produced no output for 2s while its process was still alive/);
+    assert.match(stored.rendered ?? "", /Partial answer before the hook held the process/);
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("run rejects a negative --idle-timeout-ms", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "run", "--idle-timeout-ms", "-1", "anything"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}${result.stdout}`, /--idle-timeout-ms/);
+});
+
 test("runs and show surface the latest finished run", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
