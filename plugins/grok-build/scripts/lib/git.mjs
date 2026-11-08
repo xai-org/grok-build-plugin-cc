@@ -137,11 +137,13 @@ export function getWorkingTreeState(cwd) {
 }
 
 export function resolveReviewTarget(cwd, options = {}) {
-  ensureGitRepository(cwd);
+  // `git ls-files --others` only lists untracked files under the directory
+  // it runs in, so read the working tree state from the repository root.
+  const repoRoot = ensureGitRepository(cwd);
 
   const requestedScope = options.scope ?? "auto";
   const baseRef = options.base ?? null;
-  const state = getWorkingTreeState(cwd);
+  const state = getWorkingTreeState(repoRoot);
   const supportedScopes = new Set(["auto", "working-tree", "branch"]);
 
   if (baseRef) {
