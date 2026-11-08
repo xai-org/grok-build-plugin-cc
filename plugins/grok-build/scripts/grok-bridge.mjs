@@ -26,18 +26,17 @@ import {
   buildStatusSnapshot,
   filterJobsForSession,
   getSessionRuntimeStatus,
+  listSessionJobs,
   readStoredJob,
   resolveCancelableJob,
   resolveJobKindLabel,
-  resolveResultJob,
-  sortJobsNewestFirst
+  resolveResultJob
 } from "./lib/job-control.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   claimJobTerminal,
   generateJobId,
-  listJobs,
   patchJobIfActive,
   upsertJob,
   writeJobFile
@@ -280,7 +279,7 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
+  const jobs = listSessionJobs(workspaceRoot).filter((job) => job.id !== options.excludeJobId);
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
@@ -927,7 +926,7 @@ function handleTaskResumeCandidate(argv) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const sessionId = getCurrentClaudeSessionId();
-  const jobs = filterJobsForCurrentClaudeSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
+  const jobs = listSessionJobs(workspaceRoot);
   const candidate = findLatestResumableTaskJob(jobs);
 
   const payload = {
