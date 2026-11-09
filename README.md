@@ -108,6 +108,7 @@ Write policy layering:
 | Delegate agent / skill | Adds `--write` by policy (write-capable delegate) unless the user asks for read-only |
 
 - Direct `node …/grok-bridge.mjs run "…"` is therefore read-only unless `--write` is passed.
+- `run` forwards `--allow <rule>` and `--deny <rule>` (both repeatable), `--max-turns <n>`, and `--permission-mode <mode>` to the Grok CLI. Deny rules still apply when the bridge also passes `--always-approve`. These flags are not added unless you pass them.
 - `--resume` / `--resume-last` continues the last stored Grok session id via `grok -r <id>`.
 - Prefer bridge `--background` for long work so runs record both `bridgePid` (Node worker) and `agentPid` (grok child).
 - `/grok-build:stop` terminates **both** process trees when present (agent then bridge/worker).

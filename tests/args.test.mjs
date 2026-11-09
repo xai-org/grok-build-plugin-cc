@@ -23,6 +23,19 @@ test("splitRawArgumentString respects quotes and escapes", () => {
   assert.deepEqual(tokens, ["review", "--base", "main", "focus on auth", "keep going"]);
 });
 
+test("parseArgs collects repeated allow and deny rules", () => {
+  const result = parseArgs(
+    ["--allow", "Bash(npm test)", "--allow=Bash(grep *)", "--deny", "Edit(generated/**)", "do the task"],
+    {
+      repeatableOptions: ["allow", "deny"]
+    }
+  );
+
+  assert.deepEqual(result.options.allow, ["Bash(npm test)", "Bash(grep *)"]);
+  assert.deepEqual(result.options.deny, ["Edit(generated/**)"]);
+  assert.deepEqual(result.positionals, ["do the task"]);
+});
+
 test("parseArgs throws when a value option is missing its value", () => {
   assert.throws(
     () =>

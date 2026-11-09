@@ -70,6 +70,14 @@ const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json"
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high"]);
+const VALID_PERMISSION_MODES = new Set([
+  "default",
+  "acceptEdits",
+  "auto",
+  "dontAsk",
+  "bypassPermissions",
+  "plan"
+]);
 
 function printUsage() {
   console.log(
@@ -78,7 +86,7 @@ function printUsage() {
       "  node scripts/grok-bridge.mjs check [--json]",
       "  node scripts/grok-bridge.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>]",
       "  node scripts/grok-bridge.mjs critique [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>] [focus text]",
-      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [prompt]",
+      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [--permission-mode <mode>] [--max-turns <n>] [--allow <rule>] [--deny <rule>] [prompt]",
       "  node scripts/grok-bridge.mjs import [--source <claude-jsonl>] [--json]",
       "  node scripts/grok-bridge.mjs runs [run-id] [--all] [--json]",
       "  node scripts/grok-bridge.mjs show [run-id] [--json]",
@@ -113,6 +121,51 @@ function normalizeReasoningEffort(effort) {
     );
   }
   return normalized;
+}
+
+function normalizePermissionMode(mode) {
+  if (mode == null) {
+    return null;
+  }
+  const normalized = String(mode).trim();
+  if (!normalized) {
+    return null;
+  }
+  if (!VALID_PERMISSION_MODES.has(normalized)) {
+    throw new Error(
+      `Unsupported permission mode "${mode}". Use one of: ${[...VALID_PERMISSION_MODES].join(", ")}.`
+    );
+  }
+  return normalized;
+}
+
+function normalizeMaxTurns(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const text = String(value).trim();
+  if (!/^[0-9]+$/.test(text)) {
+    throw new Error(`Unsupported max turns "${value}". Use a whole number of turns.`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`Unsupported max turns "${value}". Use a whole number of turns.`);
+  }
+  return parsed;
+}
+
+function normalizeRules(value, flag) {
+  if (value == null) {
+    return [];
+  }
+  const rules = Array.isArray(value) ? value : [value];
+  return rules.map((rule) => {
+    const text = String(rule);
+    if (!text.trim()) {
+      throw new Error(`Missing value for --${flag}`);
+    }
+    return text;
+  });
 }
 
 function normalizeArgv(argv) {
@@ -453,6 +506,10 @@ async function executeTaskRun(request) {
     // is safe in both the write and read-only cases here.
     alwaysApprove: true,
     sandbox: write ? undefined : "read-only",
+    permissionMode: request.permissionMode,
+    maxTurns: request.maxTurns,
+    allow: request.allow,
+    deny: request.deny,
     outputFormat: "plain",
     onProgress: request.onProgress
   });
@@ -547,7 +604,19 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({
+  cwd,
+  model,
+  effort,
+  prompt,
+  write,
+  resumeLast,
+  jobId,
+  permissionMode = null,
+  maxTurns = null,
+  allow = [],
+  deny = []
+}) {
   return {
     cwd,
     model,
@@ -555,7 +624,11 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
-    jobId
+    jobId,
+    permissionMode,
+    maxTurns,
+    allow,
+    deny
   };
 }
 
@@ -735,13 +808,18 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "max-turns", "permission-mode"],
+    repeatableOptions: ["allow", "deny"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
     }
   });
 
+  const permissionMode = normalizePermissionMode(options["permission-mode"]);
+  const maxTurns = normalizeMaxTurns(options["max-turns"]);
+  const allow = normalizeRules(options.allow, "allow");
+  const deny = normalizeRules(options.deny, "deny");
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = options.model ? String(options.model).trim() : null;
@@ -773,7 +851,11 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
-        jobId: job.id
+        jobId: job.id,
+        permissionMode,
+        maxTurns,
+        allow,
+        deny
       })
     };
     const { payload } = enqueueBackgroundJob(cwd, job, request);
@@ -786,13 +868,19 @@ async function handleTask(argv) {
     job,
     (progress) =>
       executeTaskRun({
-        cwd,
-        model,
-        effort,
-        prompt,
-        write,
-        resumeLast,
-        jobId: job.id,
+        ...buildTaskRequest({
+          cwd,
+          model,
+          effort,
+          prompt,
+          write,
+          resumeLast,
+          jobId: job.id,
+          permissionMode,
+          maxTurns,
+          allow,
+          deny
+        }),
         onProgress: progress
       }),
     { json: options.json }

@@ -1,5 +1,6 @@
 export function parseArgs(argv, config = {}) {
   const valueOptions = new Set(config.valueOptions ?? []);
+  const repeatableOptions = new Set(config.repeatableOptions ?? []);
   const booleanOptions = new Set(config.booleanOptions ?? []);
   const aliasMap = config.aliasMap ?? {};
   const unknownMode = config.unknownMode ?? "positional";
@@ -35,12 +36,19 @@ export function parseArgs(argv, config = {}) {
         continue;
       }
 
-      if (valueOptions.has(key)) {
+      if (repeatableOptions.has(key) || valueOptions.has(key)) {
         const nextValue = inlineValue ?? argv[index + 1];
         if (nextValue === undefined) {
           throw new Error(`Missing value for --${rawKey}`);
         }
-        options[key] = nextValue;
+        if (repeatableOptions.has(key)) {
+          if (!Array.isArray(options[key])) {
+            options[key] = [];
+          }
+          options[key].push(nextValue);
+        } else {
+          options[key] = nextValue;
+        }
         if (inlineValue === undefined) {
           index += 1;
         }
@@ -66,12 +74,19 @@ export function parseArgs(argv, config = {}) {
       continue;
     }
 
-    if (valueOptions.has(key)) {
+    if (repeatableOptions.has(key) || valueOptions.has(key)) {
       const nextValue = argv[index + 1];
       if (nextValue === undefined) {
         throw new Error(`Missing value for -${shortKey}`);
       }
-      options[key] = nextValue;
+      if (repeatableOptions.has(key)) {
+        if (!Array.isArray(options[key])) {
+          options[key] = [];
+        }
+        options[key].push(nextValue);
+      } else {
+        options[key] = nextValue;
+      }
       index += 1;
       continue;
     }
