@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { getConfig, listJobs, readJobFile, reconcileJobs, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -28,6 +28,12 @@ export function filterJobsForSession(jobs, options = {}) {
 
 function filterJobsForCurrentSession(jobs, options = {}) {
   return filterJobsForSession(jobs, options);
+}
+
+export function listSessionJobs(workspaceRoot, options = {}) {
+  const visible = filterJobsForCurrentSession(listJobs(workspaceRoot), options);
+  const ids = new Set(visible.map((job) => job.id));
+  return sortJobsNewestFirst(reconcileJobs(workspaceRoot, [...ids]).filter((job) => ids.has(job.id)));
 }
 
 /** Internal kind/jobClass "task" surfaces as user-facing "delegate". */
@@ -221,7 +227,7 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
-  const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), options));
+  const jobs = listSessionJobs(workspaceRoot, options);
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
 
@@ -254,15 +260,17 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
     throw new Error(`No run found for "${reference}". Run /grok-build:runs to inspect known runs.`);
   }
 
-  return {
-    workspaceRoot,
-    job: enrichJob(selected, { maxProgressLines: options.maxProgressLines })
-  };
+  const current = reconcileJobs(workspaceRoot, [selected.id]).find((job) => job.id === selected.id) ?? selected;
+  return { workspaceRoot, job: enrichJob(current, { maxProgressLines: options.maxProgressLines }) };
 }
 
 export function resolveResultJob(cwd, reference) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(reference ? listJobs(workspaceRoot) : filterJobsForCurrentSession(listJobs(workspaceRoot)));
+  const visible = reference
+    ? listJobs(workspaceRoot).filter((job) => job.id.startsWith(reference))
+    : filterJobsForCurrentSession(listJobs(workspaceRoot));
+  const ids = new Set(visible.map((job) => job.id));
+  const jobs = sortJobsNewestFirst(reconcileJobs(workspaceRoot, [...ids]).filter((job) => ids.has(job.id)));
   const selected = matchJobReference(
     jobs,
     reference,

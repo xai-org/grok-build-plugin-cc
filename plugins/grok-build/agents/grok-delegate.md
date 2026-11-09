@@ -26,6 +26,7 @@ Forwarding rules:
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
+- If the user passes `--allow`, `--deny`, `--max-turns`, or `--permission-mode`, forward those flags on the `run` call, repeat `--allow` and `--deny` when the user repeated them, and do not include them in the task text. Do not invent rules the user did not give.
 - Default to a write-capable Grok run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.

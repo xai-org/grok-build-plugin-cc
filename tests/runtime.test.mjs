@@ -141,12 +141,12 @@ test("critique returns structured findings payload path", () => {
   assert.ok(Array.isArray(payload.result?.findings));
 });
 
-function setupReviewableRepo() {
+function setupReviewableRepo(scenario = "default") {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const pluginDataDir = makeTempDir();
   const fakeGrokLog = path.join(pluginDataDir, "fake-grok.log");
-  installFakeGrok(binDir);
+  installFakeGrok(binDir, scenario);
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "src.js"), "export const value = 1;\n");
   run("git", ["add", "src.js"], { cwd: repo });
@@ -187,6 +187,25 @@ test("review forwards --model and --effort to grok", () => {
   assert.equal(argv[argv.indexOf("--effort") + 1], "high");
 });
 
+test("critique succeeds when grok --single rejects --json-schema", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo("reject-json-schema");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.review, "Critique");
+  assert.equal(payload.result?.verdict, "approve");
+  const argv = lastFakeGrokArgv(fakeGrokLog);
+  assert.equal(argv.includes("--json-schema"), false);
+  assert.equal(argv[argv.indexOf("--output-format") + 1], "json");
+  const prompt = argv[argv.indexOf("-p") + 1];
+  assert.match(prompt, /Return only valid JSON matching this schema/);
+});
+
 test("critique forwards --model and --effort to grok", () => {
   const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
 
@@ -205,6 +224,7 @@ test("critique forwards --model and --effort to grok", () => {
   assert.equal(argv[argv.indexOf("--model") + 1], "grok-build");
   assert.ok(argv.includes("--effort"));
   assert.equal(argv[argv.indexOf("--effort") + 1], "medium");
+  assert.ok(argv.includes("--json-schema"));
 });
 
 test("review rejects unsupported --effort values", () => {

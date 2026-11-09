@@ -50,6 +50,97 @@ test("getGrokAuthStatus treats failed models as not logged in", () => {
   assert.match(auth.detail, /Not logged in|not logged in|failed/i);
 });
 
+test("getGrokAuthStatus treats a zero-exit unauthenticated probe as not logged in", () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir, "not-authenticated");
+  const env = buildEnv(binDir);
+
+  const auth = getGrokAuthStatus(process.cwd(), { env });
+  assert.equal(auth.loggedIn, false);
+  assert.equal(auth.verified, false);
+  assert.equal(auth.authMethod, null);
+  assert.match(auth.detail, /not authenticated/i);
+});
+
+test("getGrokAuthStatus treats API-key and deployment-key banners as authenticated", () => {
+  for (const scenario of ["api-key", "deployment-key"]) {
+    const binDir = makeTempDir();
+    installFakeGrok(binDir, scenario);
+    const env = buildEnv(binDir);
+
+    const auth = getGrokAuthStatus(process.cwd(), { env });
+    assert.equal(auth.loggedIn, true, scenario);
+    assert.equal(auth.verified, true, scenario);
+    assert.equal(auth.authMethod, "api-key", scenario);
+  }
+});
+
+test("getGrokAuthStatus ignores log-in advisories below the auth banner", () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir, "api-key-advisory");
+  const env = buildEnv(binDir);
+
+  const auth = getGrokAuthStatus(process.cwd(), { env });
+  assert.equal(auth.loggedIn, true);
+  assert.equal(auth.verified, true);
+  assert.equal(auth.authMethod, "api-key");
+});
+
+test("runHeadlessAgent passes --json-schema when supported", async () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir);
+  const env = buildEnv(binDir);
+  const cwd = makeTempDir();
+  const schema = {
+    type: "object",
+    properties: { verdict: { type: "string" } }
+  };
+
+  const result = await runHeadlessAgent(cwd, {
+    prompt: "Return only valid JSON matching this schema",
+    env,
+    outputFormat: "json",
+    jsonSchema: schema,
+    agent: "explore",
+    sandbox: "read-only",
+    alwaysApprove: true
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.args.includes("--json-schema"));
+  assert.equal(result.args[result.args.indexOf("--json-schema") + 1], JSON.stringify(schema));
+  assert.ok(result.args.includes("--output-format"));
+  assert.equal(result.args[result.args.indexOf("--output-format") + 1], "json");
+  assert.equal(JSON.parse(result.finalMessage).verdict, "approve");
+});
+
+test("runHeadlessAgent falls back without --json-schema when grok rejects the flag", async () => {
+  const binDir = makeTempDir();
+  installFakeGrok(binDir, "reject-json-schema");
+  const env = buildEnv(binDir);
+  const cwd = makeTempDir();
+  const schema = {
+    type: "object",
+    properties: { verdict: { type: "string" } }
+  };
+
+  const result = await runHeadlessAgent(cwd, {
+    prompt: "Return only valid JSON matching this schema",
+    env,
+    outputFormat: "json",
+    jsonSchema: schema,
+    agent: "explore",
+    sandbox: "read-only",
+    alwaysApprove: true
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.args.includes("--json-schema"), false);
+  assert.ok(result.args.includes("--output-format"));
+  assert.equal(result.args[result.args.indexOf("--output-format") + 1], "json");
+  assert.equal(JSON.parse(result.finalMessage).verdict, "approve");
+});
+
 test("runHeadlessAgent captures stdout and session id from fake grok", async () => {
   const binDir = makeTempDir();
   installFakeGrok(binDir);
@@ -152,6 +243,9 @@ test("live grok --help advertises headless flags when grok is on PATH", () => {
     "--always-approve",
     "--agent",
     "--permission-mode",
+    "--allow",
+    "--deny",
+    "--max-turns",
     "--sandbox",
     "--output-format",
     "--json-schema",

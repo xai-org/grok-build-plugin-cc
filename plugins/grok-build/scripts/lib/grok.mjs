@@ -21,22 +21,52 @@ export function resolveGrokBinary(env = process.env) {
   return DEFAULT_BINARY;
 }
 
+function invocationFor(binary) {
+  if (
+    process.platform === "win32" &&
+    path.isAbsolute(binary) &&
+    fs.existsSync(binary) &&
+    !/\.exe$/i.test(binary)
+  ) {
+    // A GROK_BINARY script has no PATHEXT entry, so cmd would skip it and
+    // launch a real grok.exe. Run that file with node instead.
+    return {
+      command: process.execPath,
+      prefix: [binary],
+      binary,
+      shell: false
+    };
+  }
+  return { command: binary, prefix: [], binary, shell: undefined };
+}
+
 export function runGrok(args = [], options = {}) {
   const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  return runCommand(binary, args, {
+  const invocation = invocationFor(binary);
+  return runCommand(invocation.command, [...invocation.prefix, ...args], {
     cwd: options.cwd,
     env: options.env,
     input: options.input,
     maxBuffer: options.maxBuffer,
-    stdio: options.stdio
+    stdio: options.stdio,
+    shell: invocation.shell
   });
 }
 
 export function getGrokAvailability(cwd, options = {}) {
   const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
-  const versionStatus = binaryAvailable(binary, ["version"], { cwd, env: options.env });
+  const invocation = invocationFor(binary);
+  const versionStatus = binaryAvailable(invocation.command, [...invocation.prefix, "version"], {
+    cwd,
+    env: options.env,
+    shell: invocation.shell
+  });
   if (!versionStatus.available) {
-    const alt = binaryAvailable(binary, ["--version"], { cwd, env: options.env });
+    const alt = binaryAvailable(invocation.command, [...invocation.prefix, "--version"], {
+      cwd,
+      env: options.env,
+      shell: invocation.shell
+    });
     if (!alt.available) {
       return {
         available: false,
@@ -105,17 +135,43 @@ export function runModelsProbe(cwd, options = {}) {
     });
   }
 
+  // `grok models` exits 0 whether or not the CLI is authenticated, and prints the
+  // model roster in both states, so exit status and the presence of "available
+  // models" cannot distinguish them. Detect the unauthenticated banner instead.
   const stdout = (result.stdout || "").trim();
-  const loggedInHint = /logged in|available models|default model/i.test(stdout);
+  // `grok models` prints exactly one auth banner as its first line
+  // (xai-grok-pager/src/models.rs): "You are not authenticated.",
+  // "You are logged in with <host>.", "You are using XAI_API_KEY.",
+  // "Model '<m>' is using its own API key.", or
+  // "You are authenticated via deployment key.". Only the first one means
+  // the CLI cannot make calls; the other four are all usable credentials.
+  // The exact banner may match on any line; the looser phrases only on the
+  // first line, so advisory text further down ("please log in again if a
+  // model is unavailable") cannot flip a usable credential to logged-out.
+  const notAuthenticated =
+    /^You are not authenticated\./m.test(stdout) || /not logged in|please log in/i.test(firstLine(stdout) ?? "");
+  const authBanner =
+    /^(You are logged in with |You are using XAI_API_KEY|Model '.*' is using its own API key|You are authenticated via deployment key)/im.exec(
+      stdout
+    );
+  const authMethod = notAuthenticated
+    ? null
+    : authBanner
+      ? authBanner[1].startsWith("You are logged in")
+        ? "grok-cli"
+        : "api-key"
+      : "unknown";
+  // An unrecognised banner (future CLI wording) stays loggedIn so the gate does
+  // not block, but is reported as unverified.
+  const loggedIn = !notAuthenticated;
+  const verified = !notAuthenticated && authBanner !== null;
   return buildAuthStatus({
     available: true,
-    loggedIn: true,
-    detail: loggedInHint
-      ? firstLine(stdout) || "grok models succeeded"
-      : firstLine(stdout) || "grok models succeeded (treated as logged in)",
+    loggedIn,
+    detail: firstLine(stdout) || "grok models succeeded",
     source: "models-probe",
-    authMethod: "grok-cli",
-    verified: true
+    authMethod,
+    verified
   });
 }
 
@@ -152,6 +208,20 @@ function emitProgress(onProgress, message, phase = null, extra = {}) {
   onProgress({ message, phase, ...extra });
 }
 
+function listRules(value) {
+  if (value == null || value === "") {
+    return [];
+  }
+  const rules = Array.isArray(value) ? value : [value];
+  return rules.map((rule) => {
+    const text = String(rule);
+    if (!text.trim()) {
+      throw new Error("Permission rules passed to the Grok CLI must not be blank.");
+    }
+    return text;
+  });
+}
+
 function buildHeadlessArgs(prompt, options = {}) {
   const args = [];
 
@@ -173,6 +243,15 @@ function buildHeadlessArgs(prompt, options = {}) {
   }
   if (options.permissionMode) {
     args.push("--permission-mode", options.permissionMode);
+  }
+  if (options.maxTurns != null) {
+    args.push("--max-turns", String(options.maxTurns));
+  }
+  for (const rule of listRules(options.allow)) {
+    args.push("--allow", rule);
+  }
+  for (const rule of listRules(options.deny)) {
+    args.push("--deny", rule);
   }
   if (options.sandbox) {
     args.push("--sandbox", options.sandbox);
@@ -202,6 +281,7 @@ function buildHeadlessArgs(prompt, options = {}) {
 
 export function runHeadlessAgent(cwd, options = {}) {
   const binary = options.binary ?? resolveGrokBinary(options.env ?? process.env);
+  const invocation = invocationFor(binary);
   const prompt = String(options.prompt ?? "").trim() || options.defaultPrompt || "";
   if (!prompt) {
     return Promise.reject(new Error("A prompt is required for this Grok run."));
@@ -221,7 +301,7 @@ export function runHeadlessAgent(cwd, options = {}) {
   const detached = options.detached ?? platform !== "win32";
 
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, {
+    const child = spawn(invocation.command, [...invocation.prefix, ...args], {
       cwd,
       env: options.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -254,6 +334,26 @@ export function runHeadlessAgent(cwd, options = {}) {
 
     child.on("close", (code, signal) => {
       const status = code ?? (signal ? 1 : 0);
+      if (
+        status !== 0 &&
+        options.jsonSchema &&
+        /unexpected argument ['"]?--json-schema['"]?/i.test(stderr)
+      ) {
+        emitProgress(
+          options.onProgress,
+          "Grok rejected --json-schema; retrying with prompt-embedded schema.",
+          "retrying",
+          { threadId: sessionId, agentPid }
+        );
+        const { jsonSchema: _omitted, ...fallbackOptions } = options;
+        resolve(
+          runHeadlessAgent(cwd, {
+            ...fallbackOptions,
+            sessionId: options.resumeSessionId || options.continueLast ? undefined : sessionId
+          })
+        );
+        return;
+      }
       emitProgress(
         options.onProgress,
         status === 0 ? "Grok finished." : `Grok exited with status ${status}.`,

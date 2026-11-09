@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up work to the Grok Build delegate subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [what Grok should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [--permission-mode <mode>] [--max-turns <n>] [--allow <rule>] [--deny <rule>] [what Grok should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -19,6 +19,7 @@ Execution mode:
 - Prefer bridge `--background` for long or open-ended work so the run records both `bridgePid` (Node worker) and `agentPid` (grok child).
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `run`, and do not treat them as part of the natural-language task text.
 - `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `run` call, but do not treat them as part of the natural-language task text.
+- `--allow`, `--deny`, `--max-turns`, and `--permission-mode` are permission bounds. Preserve each one for the forwarded `run` call, including repeated `--allow` and `--deny`, and do not treat them as part of the natural-language task text. Do not invent rules the user did not give.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--fresh`, do not ask whether to continue. The user already chose.
 - Otherwise, before starting Grok, check for a resumable delegate thread from this Claude session by running:
