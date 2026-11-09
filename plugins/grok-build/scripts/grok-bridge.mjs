@@ -650,14 +650,13 @@ export function enqueueBackgroundJob(cwd, job, request, options = {}) {
   const child = spawnWorker(cwd, job.id);
   const workerPid = child?.pid ?? null;
   if (workerPid != null) {
+    // The worker may already hold the state lock and have moved the job to
+    // "running" with its grok pid, so record only the worker pid here. Writing
+    // status, phase, or agentPid would roll that progress back, and the worker
+    // only re-reports agentPid when it changes.
     patchJobIfActive(job.workspaceRoot, job.id, {
-      status: "queued",
-      phase: "queued",
       pid: workerPid,
-      bridgePid: workerPid,
-      agentPid: null,
-      logFile,
-      request
+      bridgePid: workerPid
     });
   }
 

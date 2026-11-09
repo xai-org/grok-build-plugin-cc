@@ -449,6 +449,68 @@ test("enqueueBackgroundJob writes the job file before spawning the worker", asyn
   }
 });
 
+test("enqueueBackgroundJob keeps a worker's running state and agentPid when the worker starts first", async () => {
+  const { enqueueBackgroundJob } = await import("../plugins/grok-build/scripts/grok-bridge.mjs");
+  const { patchJobIfActive } = await import("../plugins/grok-build/scripts/lib/state.mjs");
+  const repo = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+
+  try {
+    const job = {
+      id: generateJobId("run"),
+      kind: "task",
+      kindLabel: "delegate",
+      title: "Grok Build Delegate",
+      workspaceRoot: repo,
+      jobClass: "task",
+      summary: "bg race",
+      write: false
+    };
+
+    const result = enqueueBackgroundJob(
+      repo,
+      job,
+      { kind: "task", cwd: repo, prompt: "hello", write: false, resumeLast: false, jobId: job.id },
+      {
+        spawnWorker(cwd, jobId) {
+          // The worker won the state lock before the parent recorded its pid: runTrackedJob
+          // marked the job running and the first progress event reported the grok pid.
+          patchJobIfActive(repo, jobId, {
+            status: "running",
+            startedAt: new Date().toISOString(),
+            phase: "starting",
+            bridgePid: 424242,
+            pid: 424242,
+            agentPid: null
+          });
+          patchJobIfActive(repo, jobId, { phase: "running", agentPid: 515151, threadId: "thread-race" });
+          return { pid: 424242 };
+        }
+      }
+    );
+
+    assert.equal(result.payload.pid, 424242);
+    const stored = readStoredJobFromDisk(repo, job.id);
+    assert.equal(stored.status, "running");
+    assert.equal(stored.phase, "running");
+    assert.equal(stored.agentPid, 515151);
+    assert.equal(stored.threadId, "thread-race");
+    assert.equal(stored.pid, 424242);
+    assert.equal(stored.bridgePid, 424242);
+    const indexed = listJobs(repo).find((entry) => entry.id === job.id);
+    assert.equal(indexed.status, "running");
+    assert.equal(indexed.agentPid, 515151);
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
 function readStoredJobFromDisk(workspaceRoot, jobId) {
   const jobFile = path.join(resolveStateDir(workspaceRoot), "jobs", `${jobId}.json`);
   if (!fs.existsSync(jobFile)) {
