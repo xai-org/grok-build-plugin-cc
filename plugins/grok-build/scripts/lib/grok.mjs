@@ -369,22 +369,26 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
   } catch {
   }
 
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) {
+  // Try every fenced block, JSON-tagged ones first, so a shell or diff fence
+  // earlier in the message does not shadow the JSON block that follows it.
+  const fences = [];
+  for (const match of text.matchAll(/```([\w+-]*)[ \t]*\n?([\s\S]*?)```/g)) {
+    const tag = match[1].toLowerCase();
+    fences.push({ tag, body: match[2].trim(), rank: tag === "json" ? 0 : tag === "" ? 1 : 2 });
+  }
+  fences.sort((left, right) => left.rank - right.rank);
+
+  let firstError = null;
+  for (const fence of fences) {
     try {
       return {
         ...fallback,
-        parsed: JSON.parse(fenced[1].trim()),
+        parsed: JSON.parse(fence.body),
         parseError: null,
         rawOutput: text
       };
     } catch (error) {
-      return {
-        ...fallback,
-        parsed: null,
-        parseError: error.message,
-        rawOutput: text
-      };
+      firstError ??= error;
     }
   }
 
@@ -399,19 +403,14 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
         rawOutput: text
       };
     } catch (error) {
-      return {
-        ...fallback,
-        parsed: null,
-        parseError: error.message,
-        rawOutput: text
-      };
+      firstError ??= error;
     }
   }
 
   return {
     ...fallback,
     parsed: null,
-    parseError: "Could not parse structured JSON from Grok output.",
+    parseError: firstError ? firstError.message : "Could not parse structured JSON from Grok output.",
     rawOutput: text
   };
 }
