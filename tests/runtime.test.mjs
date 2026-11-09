@@ -141,12 +141,12 @@ test("critique returns structured findings payload path", () => {
   assert.ok(Array.isArray(payload.result?.findings));
 });
 
-function setupReviewableRepo() {
+function setupReviewableRepo(scenario = "default") {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   const pluginDataDir = makeTempDir();
   const fakeGrokLog = path.join(pluginDataDir, "fake-grok.log");
-  installFakeGrok(binDir);
+  installFakeGrok(binDir, scenario);
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "src.js"), "export const value = 1;\n");
   run("git", ["add", "src.js"], { cwd: repo });
@@ -187,6 +187,149 @@ test("review forwards --model and --effort to grok", () => {
   assert.equal(argv[argv.indexOf("--effort") + 1], "high");
 });
 
+test("critique succeeds when grok --single rejects --json-schema", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo("reject-json-schema");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.review, "Critique");
+  assert.equal(payload.result?.verdict, "approve");
+  const argv = lastFakeGrokArgv(fakeGrokLog);
+  assert.equal(argv.includes("--json-schema"), false);
+  assert.equal(argv[argv.indexOf("--output-format") + 1], "streaming-messages-json");
+  const prompt = argv[argv.indexOf("-p") + 1];
+  assert.match(prompt, /Return only valid JSON matching this schema/);
+});
+
+test("critique fallback refuses narration instead of brace-slicing a verdict out of it", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo("reject-json-schema-narration");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 1, "a refused review is a failed command");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.ok(payload.parseError);
+  assert.match(payload.rawOutput, /^I read the diff/);
+});
+
+test("critique fallback exits non-zero when the final block parses to a non-review", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("reject-json-schema-array");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /not a JSON object/);
+});
+
+test("a critique that returns no review records why as its job summary", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("reject-json-schema-array");
+
+  const result = run("node", [SCRIPT, "critique", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  assert.equal(result.status, 1, result.stderr);
+
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const [job] = listJobs(repo);
+    assert.match(job.summary, /not a JSON object/);
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("critique exits non-zero when structured_output has the wrong shape", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("schema-wrong-shape");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /Missing string `verdict`/);
+});
+
+test("critique reads the review from structured_output on the message stream", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result?.verdict, "approve");
+  assert.equal(payload.parseError, null);
+  const argv = lastFakeGrokArgv(fakeGrokLog);
+  assert.ok(argv.includes("--json-schema"));
+  assert.equal(argv[argv.indexOf("--output-format") + 1], "streaming-messages-json");
+});
+
+test("critique takes structured_output when the final message has no text", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("schema-no-text");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result?.verdict, "approve");
+});
+
+test("critique fails closed when the result event carries no structured_output", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("schema-no-structured");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 1, "a refused review is a failed command");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /structured_output/);
+});
+
+test("critique refuses a successful result event when grok exits non-zero", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("stop-hook-fails");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /Stop hook failed/);
+});
+
 test("critique forwards --model and --effort to grok", () => {
   const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
 
@@ -205,6 +348,7 @@ test("critique forwards --model and --effort to grok", () => {
   assert.equal(argv[argv.indexOf("--model") + 1], "grok-build");
   assert.ok(argv.includes("--effort"));
   assert.equal(argv[argv.indexOf("--effort") + 1], "medium");
+  assert.ok(argv.includes("--json-schema"));
 });
 
 test("review rejects unsupported --effort values", () => {
@@ -246,6 +390,77 @@ test("run delegates through fake grok and stores a finished job", () => {
     assert.ok(jobs.length >= 1);
     assert.equal(jobs[0].jobClass, "task");
     assert.equal(jobs[0].status, "completed");
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("run returns the final answer, never the narration before it", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "run", "--json", "do a small thing"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).rawOutput, "Handled the requested task.");
+});
+
+test("review returns the final answer, never the narration before it", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "review", "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).grok.stdout, "Reviewed uncommitted changes.\nNo material issues found.");
+});
+
+test("a failed run reports grok's own error, not the missing answer", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("fail-print");
+
+  const result = run("node", [SCRIPT, "run", "do a small thing"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout + result.stderr, /fake grok failed the print run/);
+});
+
+test("a failed review reports grok's own error, not the missing answer", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("fail-print");
+
+  const result = run("node", [SCRIPT, "review", "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(JSON.parse(result.stdout).grok.stderr, /fake grok failed the print run/);
+});
+
+test("a review's job summary comes from the answer, not the raw output", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "review"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  assert.equal(result.status, 0, result.stderr);
+
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const [job] = listJobs(repo);
+    assert.equal(job.summary, "Reviewed uncommitted changes.");
   } finally {
     if (previous == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;

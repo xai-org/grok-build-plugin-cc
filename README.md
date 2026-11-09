@@ -73,7 +73,7 @@ Read-only review of local git state:
 Runs:
 
 ```bash
-grok -p <prompt> --agent explore --permission-mode plan --sandbox read-only --cwd <ws> --output-format plain
+grok -p <prompt> --agent explore --always-approve --sandbox read-only --cwd <ws> --output-format streaming-messages-json
 ```
 
 Optional: pass `--model` / `--effort` (`low`|`medium`|`high`). If omitted, Grok chooses defaults.
@@ -108,6 +108,7 @@ Write policy layering:
 | Delegate agent / skill | Adds `--write` by policy (write-capable delegate) unless the user asks for read-only |
 
 - Direct `node …/grok-bridge.mjs run "…"` is therefore read-only unless `--write` is passed.
+- `run` forwards `--allow <rule>` and `--deny <rule>` (both repeatable), `--max-turns <n>`, and `--permission-mode <mode>` to the Grok CLI. Deny rules still apply when the bridge also passes `--always-approve`. These flags are not added unless you pass them.
 - `--resume` / `--resume-last` continues the last stored Grok session id via `grok -r <id>`.
 - Prefer bridge `--background` for long work so runs record both `bridgePid` (Node worker) and `agentPid` (grok child).
 - `/grok-build:stop` terminates **both** process trees when present (agent then bridge/worker).
@@ -152,6 +153,47 @@ Stop an active run by terminating tracked process trees:
 ```
 
 Kills every distinct pid among `agentPid` (detached grok child) and `bridgePid` / legacy `companionPid` / legacy `pid` (bridge or run-worker). Terminal status is claimed under a locked CAS so a finishing worker cannot overwrite `cancelled` with `completed`.
+
+### Interrupted runs and state locks
+
+`runs`, `show`, and delegate continuation reconcile the selected runs when both
+the recorded bridge and Grok processes have exited. An interrupted active run
+becomes `failed` with an explanation, while its log, session ID and captured
+results remain available. Reconciliation preserves an already saved terminal
+result and repairs an index left behind by an interrupted write. Session lists
+reconcile only that session; an explicit run reference can select another one.
+
+A live process, a reused PID, an unavailable process check, or a missing PID
+keeps the run protected. In particular, an agent may have started before its PID
+was saved. Such records can remain active until their ownership can be checked;
+an old timestamp alone is not evidence that a process has exited. Plugin state
+and its process IDs are local to one host, so do not share an active state root
+between machines.
+
+New state locks use a directory at `state.json.lock`. A complete, uniquely named
+owner marker is prepared before the directory is published. An exited owner's
+marker can be removed safely; a delayed recovery attempt cannot remove a new
+owner's marker. There is no heartbeat or age based lock expiry.
+
+On Windows, publication first reserves the lock name with a hard link to the
+complete owner marker. This prevents Windows directory rename semantics from
+replacing a legacy lock file. The state filesystem must support hard links.
+A crash between reservation and directory publication leaves a metadata file
+at the lock path. It stays protected and requires the same offline repair as a
+legacy lock; automatic recovery resumes once ownership is published as a
+directory. A failed publication also reports this repair path.
+
+Older zero byte lock files and unrecognized lock metadata require manual repair.
+The timeout names the exact lock path. Stop all bridge, worker and Grok processes
+using that workspace, then move only that lock aside before restarting. Keep
+`state.json` and the `jobs` directory intact. Apply the same offline procedure
+to a lock from another hostname or an owner whose liveness cannot be checked.
+Do not move a lock while a process may still be writing.
+
+A hard kill before publication may also leave a `state.json.lock.pending-*`
+directory beside the lock. These unpublished candidates do not hold the lock
+or block subsequent work. They may be removed during the same offline repair;
+normal completion and errors clean their own candidates automatically.
 
 ## Environment
 

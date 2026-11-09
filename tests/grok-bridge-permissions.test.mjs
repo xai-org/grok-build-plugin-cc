@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,7 @@ const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "grok-bridge.mjs");
 function pluginDataEnv(pluginDataDir, binDir, extra = {}) {
   return buildEnv(binDir, {
     CLAUDE_PLUGIN_DATA: pluginDataDir,
+    GROK_BINARY: path.join(binDir, "grok"),
     ...extra
   });
 }
@@ -80,6 +82,75 @@ test("run without --write passes --always-approve alongside --sandbox read-only"
   assert.ok(argv.includes("--always-approve"), argv.join(" "));
   assert.ok(argv.includes("--sandbox"), argv.join(" "));
   assert.equal(argv[argv.indexOf("--sandbox") + 1], "read-only");
+});
+
+test("run forwards allow, deny, max-turns, and permission-mode", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupRepo();
+
+  const result = run(
+    process.execPath,
+    [
+      SCRIPT,
+      "run",
+      "--write",
+      "--permission-mode",
+      "acceptEdits",
+      "--max-turns",
+      "30",
+      "--allow",
+      "Bash(npm test)",
+      "--allow",
+      "Bash(grep *)",
+      "--deny",
+      "Edit(generated/**)",
+      "make the change"
+    ],
+    {
+      cwd: repo,
+      env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog }),
+      shell: false
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const argv = lastFakeGrokArgv(fakeGrokLog);
+  assert.equal(argv[argv.indexOf("--permission-mode") + 1], "acceptEdits");
+  assert.equal(argv[argv.indexOf("--max-turns") + 1], "30");
+  const allowRules = argv.filter((_, index) => argv[index - 1] === "--allow");
+  const denyRules = argv.filter((_, index) => argv[index - 1] === "--deny");
+  assert.deepEqual(allowRules, ["Bash(npm test)", "Bash(grep *)"]);
+  assert.deepEqual(denyRules, ["Edit(generated/**)"]);
+  assert.ok(argv.includes("--always-approve"), argv.join(" "));
+  assert.ok(!argv.includes("--sandbox"), argv.join(" "));
+});
+
+test("run without bounds does not invent allow, deny, or max-turns", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupRepo();
+
+  const result = run("node", [SCRIPT, "run", "--write", "make the change"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const argv = lastFakeGrokArgv(fakeGrokLog);
+  assert.ok(!argv.includes("--allow"), argv.join(" "));
+  assert.ok(!argv.includes("--deny"), argv.join(" "));
+  assert.ok(!argv.includes("--max-turns"), argv.join(" "));
+  assert.ok(!argv.includes("--permission-mode"), argv.join(" "));
+});
+
+test("run rejects an unknown permission mode before launching grok", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupRepo();
+
+  const result = run("node", [SCRIPT, "run", "--permission-mode", "yolo", "make the change"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unsupported permission mode/);
+  assert.equal(fs.existsSync(fakeGrokLog), false);
 });
 
 test("run with --write passes --always-approve without a sandbox flag", () => {

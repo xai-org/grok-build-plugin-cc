@@ -11,33 +11,33 @@ import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import {
+  answerFromMessageStream,
   buildReviewPrompt,
   DEFAULT_CONTINUE_PROMPT,
   getGrokAuthStatus,
   getGrokAvailability,
-  parseStructuredOutput,
   readOutputSchema,
   runHeadlessAgent,
   runImport,
-  schemaInstructionsFromPath
+  schemaInstructionsFromPath,
+  structuredOutputFromMessageStream
 } from "./lib/grok.mjs";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
   filterJobsForSession,
   getSessionRuntimeStatus,
+  listSessionJobs,
   readStoredJob,
   resolveCancelableJob,
   resolveJobKindLabel,
-  resolveResultJob,
-  sortJobsNewestFirst
+  resolveResultJob
 } from "./lib/job-control.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   claimJobTerminal,
   generateJobId,
-  listJobs,
   patchJobIfActive,
   upsertJob,
   writeJobFile
@@ -62,7 +62,8 @@ import {
   renderSetupReport,
   renderStatusReport,
   renderStoredJobResult,
-  renderTaskResult
+  renderTaskResult,
+  validateReviewResultShape
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -70,6 +71,14 @@ const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json"
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high"]);
+const VALID_PERMISSION_MODES = new Set([
+  "default",
+  "acceptEdits",
+  "auto",
+  "dontAsk",
+  "bypassPermissions",
+  "plan"
+]);
 
 function printUsage() {
   console.log(
@@ -78,7 +87,7 @@ function printUsage() {
       "  node scripts/grok-bridge.mjs check [--json]",
       "  node scripts/grok-bridge.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>]",
       "  node scripts/grok-bridge.mjs critique [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <model>] [--effort <low|medium|high>] [focus text]",
-      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [prompt]",
+      "  node scripts/grok-bridge.mjs run [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [--permission-mode <mode>] [--max-turns <n>] [--allow <rule>] [--deny <rule>] [prompt]",
       "  node scripts/grok-bridge.mjs import [--source <claude-jsonl>] [--json]",
       "  node scripts/grok-bridge.mjs runs [run-id] [--all] [--json]",
       "  node scripts/grok-bridge.mjs show [run-id] [--json]",
@@ -113,6 +122,51 @@ function normalizeReasoningEffort(effort) {
     );
   }
   return normalized;
+}
+
+function normalizePermissionMode(mode) {
+  if (mode == null) {
+    return null;
+  }
+  const normalized = String(mode).trim();
+  if (!normalized) {
+    return null;
+  }
+  if (!VALID_PERMISSION_MODES.has(normalized)) {
+    throw new Error(
+      `Unsupported permission mode "${mode}". Use one of: ${[...VALID_PERMISSION_MODES].join(", ")}.`
+    );
+  }
+  return normalized;
+}
+
+function normalizeMaxTurns(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const text = String(value).trim();
+  if (!/^[0-9]+$/.test(text)) {
+    throw new Error(`Unsupported max turns "${value}". Use a whole number of turns.`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`Unsupported max turns "${value}". Use a whole number of turns.`);
+  }
+  return parsed;
+}
+
+function normalizeRules(value, flag) {
+  if (value == null) {
+    return [];
+  }
+  const rules = Array.isArray(value) ? value : [value];
+  return rules.map((rule) => {
+    const text = String(rule);
+    if (!text.trim()) {
+      throw new Error(`Missing value for --${flag}`);
+    }
+    return text;
+  });
 }
 
 function normalizeArgv(argv) {
@@ -174,6 +228,53 @@ function firstMeaningfulLine(text, fallback) {
     .map((value) => value.trim())
     .find(Boolean);
   return line ?? fallback;
+}
+
+// A CLI that failed explains itself on stderr, and that is the cause to report.
+// The extraction error explains only a run that exited 0 without a readable
+// answer; for a failed run it is a consequence, not the cause.
+function failureReason(result, answer) {
+  return result.status !== 0 ? result.stderr || answer.error : answer.error;
+}
+
+// A run passed --json-schema reports the object on the stream's result event;
+// it is never the root of stdout. When the CLI rejects that flag, the retry
+// has no structured field: read the final block, then parse it strictly — no
+// fences, no brace slicing. Either way a process that exited non-zero is a
+// failed review, even after a result event that said success (a Stop hook can
+// fail the run after it).
+function structuredOutputFor(result, fallback) {
+  const refuse = (reading) => ({
+    ...fallback,
+    parsed: null,
+    parseError: failureReason(result, reading) || `grok exited with status ${result.status}`,
+    rawOutput: ""
+  });
+  if (result.args?.includes("--json-schema")) {
+    const structured = structuredOutputFromMessageStream(result.finalMessage);
+    if (result.status !== 0 || !structured.ok) {
+      return refuse(structured);
+    }
+    return { ...fallback, parsed: structured.value, parseError: null, rawOutput: JSON.stringify(structured.value) };
+  }
+  const answer = answerFromMessageStream(result.finalMessage);
+  if (result.status !== 0 || !answer.ok) {
+    return refuse(answer);
+  }
+  try {
+    const value = JSON.parse(answer.text);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ...fallback, parsed: null, parseError: "structured answer is not a JSON object", rawOutput: answer.text };
+    }
+    return { ...fallback, parsed: value, parseError: null, rawOutput: answer.text };
+  } catch (error) {
+    return {
+      ...fallback,
+      parsed: null,
+      parseError: `structured answer is not JSON: ${error.message}`,
+      rawOutput: answer.text
+    };
+  }
 }
 
 async function buildCheckReport(cwd, actionsTaken = []) {
@@ -280,7 +381,7 @@ async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
+  const jobs = listSessionJobs(workspaceRoot).filter((job) => job.id !== options.excludeJobId);
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
@@ -335,16 +436,21 @@ async function executeReviewRun(request) {
     sandbox: "read-only",
     model: request.model,
     effort: request.effort,
-    outputFormat: structured ? "json" : "plain",
+    outputFormat: "streaming-messages-json",
     jsonSchema: structured ? readOutputSchema(REVIEW_SCHEMA) : undefined,
     onProgress: request.onProgress
   });
 
   if (structured) {
-    const parsed = parseStructuredOutput(result.finalMessage, {
+    const parsed = structuredOutputFor(result, {
       status: result.status,
       failureMessage: result.stderr
     });
+    // A review that could not be read, or is not shaped like one, is a failed
+    // command, the same rule the plain review and run paths apply, and the
+    // payload says why rather than carrying the unusable value as the result.
+    const reviewError = parsed.parseError || validateReviewResultShape(parsed.parsed);
+    const exitStatus = result.status === 0 && reviewError ? 1 : result.status;
     const payload = {
       review: reviewName,
       target,
@@ -359,13 +465,13 @@ async function executeReviewRun(request) {
         stderr: result.stderr,
         stdout: result.finalMessage
       },
-      result: parsed.parsed,
+      result: reviewError ? null : parsed.parsed,
       rawOutput: parsed.rawOutput,
-      parseError: parsed.parseError
+      parseError: reviewError || null
     };
 
     return {
-      exitStatus: result.status,
+      exitStatus,
       threadId: result.threadId,
       turnId: null,
       payload,
@@ -373,42 +479,44 @@ async function executeReviewRun(request) {
         reviewLabel: reviewName,
         targetLabel: context.target.label
       }),
-      summary:
-        parsed.parsed?.summary ??
-        parsed.parseError ??
-        firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
+      summary: reviewError || parsed.parsed.summary,
       jobTitle: `Grok Build ${reviewName}`,
       jobClass: "review",
       targetLabel: context.target.label
     };
   }
 
+  // Same fail-closed rule as the run path: the review is the final block of the
+  // message stream, never the stream itself.
+  const answer = answerFromMessageStream(result.finalMessage);
+  const exitStatus = result.status === 0 && !answer.ok ? 1 : result.status;
+  const stderr = exitStatus === 0 ? result.stderr : failureReason(result, answer);
   const payload = {
     review: reviewName,
     target,
     threadId: result.threadId,
     grok: {
-      status: result.status,
-      stderr: result.stderr,
-      stdout: result.finalMessage
+      status: exitStatus,
+      stderr,
+      stdout: answer.text
     }
   };
   const rendered = renderNativeReviewResult(
     {
-      status: result.status,
-      stdout: result.finalMessage,
-      stderr: result.stderr
+      status: exitStatus,
+      stdout: answer.text,
+      stderr
     },
     { reviewLabel: reviewName, targetLabel: target.label }
   );
 
   return {
-    exitStatus: result.status,
+    exitStatus,
     threadId: result.threadId,
     turnId: null,
     payload,
     rendered,
-    summary: firstMeaningfulLine(result.finalMessage, `${reviewName} completed.`),
+    summary: firstMeaningfulLine(answer.text, firstMeaningfulLine(stderr, `${reviewName} completed.`)),
     jobTitle: `Grok Build ${reviewName}`,
     jobClass: "review",
     targetLabel: target.label
@@ -453,12 +561,22 @@ async function executeTaskRun(request) {
     // is safe in both the write and read-only cases here.
     alwaysApprove: true,
     sandbox: write ? undefined : "read-only",
-    outputFormat: "plain",
+    permissionMode: request.permissionMode,
+    maxTurns: request.maxTurns,
+    allow: request.allow,
+    deny: request.deny,
+    outputFormat: "streaming-messages-json",
     onProgress: request.onProgress
   });
 
-  const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
-  const failureMessage = result.status === 0 ? "" : result.stderr || "";
+  const answer = answerFromMessageStream(result.finalMessage);
+  // A run that exits 0 but yields no readable answer is a failure, not an empty
+  // success. Callers take `rawOutput` as the answer itself — a verdict, a patch,
+  // a report — and must not be handed narration, or an empty string dressed as
+  // one, with a zero status beside it.
+  const exitStatus = result.status === 0 && !answer.ok ? 1 : result.status;
+  const rawOutput = answer.text;
+  const failureMessage = exitStatus === 0 ? "" : failureReason(result, answer) || "";
   const rendered = renderTaskResult(
     {
       rawOutput,
@@ -471,13 +589,13 @@ async function executeTaskRun(request) {
     }
   );
   const payload = {
-    status: result.status,
+    status: exitStatus,
     threadId: result.threadId,
     rawOutput
   };
 
   return {
-    exitStatus: result.status,
+    exitStatus,
     threadId: result.threadId,
     turnId: null,
     payload,
@@ -547,7 +665,19 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({
+  cwd,
+  model,
+  effort,
+  prompt,
+  write,
+  resumeLast,
+  jobId,
+  permissionMode = null,
+  maxTurns = null,
+  allow = [],
+  deny = []
+}) {
   return {
     cwd,
     model,
@@ -555,7 +685,11 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
-    jobId
+    jobId,
+    permissionMode,
+    maxTurns,
+    allow,
+    deny
   };
 }
 
@@ -735,13 +869,18 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "max-turns", "permission-mode"],
+    repeatableOptions: ["allow", "deny"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
     }
   });
 
+  const permissionMode = normalizePermissionMode(options["permission-mode"]);
+  const maxTurns = normalizeMaxTurns(options["max-turns"]);
+  const allow = normalizeRules(options.allow, "allow");
+  const deny = normalizeRules(options.deny, "deny");
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = options.model ? String(options.model).trim() : null;
@@ -773,7 +912,11 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
-        jobId: job.id
+        jobId: job.id,
+        permissionMode,
+        maxTurns,
+        allow,
+        deny
       })
     };
     const { payload } = enqueueBackgroundJob(cwd, job, request);
@@ -786,13 +929,19 @@ async function handleTask(argv) {
     job,
     (progress) =>
       executeTaskRun({
-        cwd,
-        model,
-        effort,
-        prompt,
-        write,
-        resumeLast,
-        jobId: job.id,
+        ...buildTaskRequest({
+          cwd,
+          model,
+          effort,
+          prompt,
+          write,
+          resumeLast,
+          jobId: job.id,
+          permissionMode,
+          maxTurns,
+          allow,
+          deny
+        }),
         onProgress: progress
       }),
     { json: options.json }
@@ -927,7 +1076,7 @@ function handleTaskResumeCandidate(argv) {
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const sessionId = getCurrentClaudeSessionId();
-  const jobs = filterJobsForCurrentClaudeSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
+  const jobs = listSessionJobs(workspaceRoot);
   const candidate = findLatestResumableTaskJob(jobs);
 
   const payload = {

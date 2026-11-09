@@ -25,6 +25,7 @@ Command selection:
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only for short enqueue semantics. Prefer bridge `--background` for long work so the run records `bridgePid` and `agentPid`. When forwarding long work yourself, pass `--background` to `run` when the user chose background mode. Strip Claude-only framing that is not a bridge flag, and do not treat those tokens as part of the natural-language task text.
 - If the forwarded request includes `--model`, pass it through to `run`.
 - If the forwarded request includes `--effort`, pass it through to `run`.
+- If the forwarded request includes `--allow`, `--deny`, `--max-turns`, or `--permission-mode`, pass each through to `run` and do not treat them as natural-language task text. Repeat `--allow` and `--deny` when the user repeated them. Do not invent rules the user did not give.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `run --resume-last`, even if the request text is ambiguous.
