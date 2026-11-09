@@ -4,6 +4,13 @@ import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 
+// Claude Code plugin hooks can export the plugin data dir into the shell that runs
+// `npm test` (#49): CLAUDE_PLUGIN_DATA today, GROK_BUILD_PLUGIN_DATA once #51 lands.
+// Inherited, either points state helpers at a real plugin's data directory, so
+// tests would read and write live job state. Tests that need one set it explicitly.
+delete process.env.CLAUDE_PLUGIN_DATA;
+delete process.env.GROK_BUILD_PLUGIN_DATA;
+
 export function makeTempDir(prefix = "grok-build-plugin-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
