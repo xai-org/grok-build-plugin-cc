@@ -106,6 +106,37 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
   );
 });
 
+test("saveState never prunes a queued or running job, even when it is the oldest", () => {
+  const workspace = makeTempDir();
+  const stateFile = resolveStateFile(workspace);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+
+  const jobs = Array.from({ length: 52 }, (_, index) => {
+    const jobId = `job-${index}`;
+    const updatedAt = new Date(Date.UTC(2026, 0, 1, 0, index, 0)).toISOString();
+    const logFile = resolveJobLogFile(workspace, jobId);
+    const jobFile = resolveJobFile(workspace, jobId);
+    // job-0 is the oldest and still running; job-1 is the oldest finished one.
+    const status = index === 0 ? "running" : "completed";
+    fs.writeFileSync(logFile, `log ${jobId}\n`, "utf8");
+    fs.writeFileSync(jobFile, JSON.stringify({ id: jobId, status }, null, 2), "utf8");
+    return { id: jobId, status, logFile, updatedAt, createdAt: updatedAt };
+  });
+  fs.writeFileSync(stateFile, `${JSON.stringify({ version: 1, config: {}, jobs }, null, 2)}\n`, "utf8");
+
+  saveState(workspace, { version: 1, config: {}, jobs });
+
+  const savedState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  const ids = savedState.jobs.map((job) => job.id);
+  assert.equal(savedState.jobs.length, 50);
+  assert.equal(ids.includes("job-0"), true, "the running job must survive the cap");
+  assert.equal(ids.includes("job-1"), false, "the oldest finished job is the one pruned");
+  assert.equal(ids.includes("job-2"), false);
+  assert.equal(fs.existsSync(resolveJobFile(workspace, "job-0")), true);
+  assert.equal(fs.existsSync(resolveJobLogFile(workspace, "job-0")), true);
+  assert.equal(fs.existsSync(resolveJobFile(workspace, "job-1")), false);
+});
+
 test("loadState quarantines corrupt state and throws instead of wiping", () => {
   const workspace = makeTempDir();
   const stateFile = resolveStateFile(workspace);

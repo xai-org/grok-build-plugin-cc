@@ -338,10 +338,23 @@ export function loadState(cwd) {
   }
 }
 
+function isActiveJobStatus(status) {
+  return status === "queued" || status === "running";
+}
+
+// Keep the newest MAX_JOBS entries by updatedAt, but never drop a queued or
+// running job: its worker is still going to write a terminal status, and
+// pruning it here would also delete its job file and log mid-run. Active jobs
+// are retained on top of the cap; only finished jobs compete for the slots.
 function pruneJobs(jobs) {
-  return [...jobs]
-    .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
-    .slice(0, MAX_JOBS);
+  const sorted = [...jobs].sort((left, right) =>
+    String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? ""))
+  );
+  const active = sorted.filter((job) => isActiveJobStatus(job.status));
+  const finished = sorted.filter((job) => !isActiveJobStatus(job.status));
+  const finishedSlots = Math.max(0, MAX_JOBS - active.length);
+  const keep = new Set([...active, ...finished.slice(0, finishedSlots)].map((job) => job.id));
+  return sorted.filter((job) => keep.has(job.id));
 }
 
 function removeFileIfExists(filePath) {
