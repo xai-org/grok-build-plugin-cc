@@ -13,16 +13,29 @@ const DEFAULT_INLINE_DIFF_MAX_BYTES = 256 * 1024;
 // Windows concatenates argv without escaping (Node DEP0190), so a ref
 // such as `main&probe.cmd` can run a tracked batch file. shell:false is
 // applied last so callers cannot re-enable the shell.
+// core.quotePath=off keeps non-ASCII paths readable in status and diff
+// headers; the path listings below additionally use -z so they can be
+// split without any unquoting.
+const GIT_CONFIG_ARGS = ["-c", "core.quotePath=off"];
+
 function git(cwd, args, options = {}) {
-  return runCommand("git", args, { cwd, ...options, shell: false });
+  return runCommand("git", [...GIT_CONFIG_ARGS, ...args], { cwd, ...options, shell: false });
 }
 
 function gitChecked(cwd, args, options = {}) {
-  return runCommandChecked("git", args, { cwd, ...options, shell: false });
+  return runCommandChecked("git", [...GIT_CONFIG_ARGS, ...args], { cwd, ...options, shell: false });
 }
 
 function listUniqueFiles(...groups) {
   return [...new Set(groups.flat().filter(Boolean))].sort();
+}
+
+// Path listings use -z so git emits raw NUL-separated paths. With the
+// default core.quotePath, any path with a non-ASCII byte, a quote, or a
+// backslash came back C-quoted ("caf\303\251.txt"), failed every fs
+// lookup, and was reported as a broken symlink.
+function listPaths(cwd, args) {
+  return gitChecked(cwd, [...args, "-z"]).stdout.split("\0").filter(Boolean);
 }
 
 function normalizeMaxInlineFiles(value) {
@@ -124,9 +137,9 @@ export function getCurrentBranch(cwd) {
 }
 
 export function getWorkingTreeState(cwd) {
-  const staged = gitChecked(cwd, ["diff", "--cached", "--name-only"]).stdout.trim().split("\n").filter(Boolean);
-  const unstaged = gitChecked(cwd, ["diff", "--name-only"]).stdout.trim().split("\n").filter(Boolean);
-  const untracked = gitChecked(cwd, ["ls-files", "--others", "--exclude-standard"]).stdout.trim().split("\n").filter(Boolean);
+  const staged = listPaths(cwd, ["diff", "--cached", "--name-only"]);
+  const unstaged = listPaths(cwd, ["diff", "--name-only"]);
+  const untracked = listPaths(cwd, ["ls-files", "--others", "--exclude-standard"]);
 
   return {
     staged,
@@ -267,7 +280,7 @@ function collectBranchContext(cwd, baseRef, options = {}) {
   const includeDiff = options.includeDiff !== false;
   const comparison = options.comparison ?? buildBranchComparison(cwd, baseRef);
   const currentBranch = getCurrentBranch(cwd);
-  const changedFiles = gitChecked(cwd, ["diff", "--name-only", comparison.commitRange]).stdout.trim().split("\n").filter(Boolean);
+  const changedFiles = listPaths(cwd, ["diff", "--name-only", comparison.commitRange]);
   const logOutput = gitChecked(cwd, ["log", "--oneline", "--decorate", comparison.commitRange]).stdout.trim();
   const diffStat = gitChecked(cwd, ["diff", "--stat", comparison.commitRange]).stdout.trim();
 
@@ -327,7 +340,7 @@ export function collectReviewContext(cwd, target, options = {}) {
     details = collectWorkingTreeContext(repoRoot, state, { includeDiff });
   } else {
     const comparison = buildBranchComparison(repoRoot, target.baseRef);
-    const fileCount = gitChecked(repoRoot, ["diff", "--name-only", comparison.commitRange]).stdout.trim().split("\n").filter(Boolean).length;
+    const fileCount = listPaths(repoRoot, ["diff", "--name-only", comparison.commitRange]).length;
     diffBytes = measureGitOutputBytes(
       repoRoot,
       ["diff", "--binary", "--no-ext-diff", "--submodule=diff", comparison.commitRange],
