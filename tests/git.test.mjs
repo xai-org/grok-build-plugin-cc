@@ -84,3 +84,42 @@ test("resolveReviewTarget honors explicit base overrides", () => {
   assert.equal(target.baseRef, "main");
   assert.equal(target.explicit, true);
 });
+test("untracked and changed files with non-ASCII names keep their real paths", () => {
+  const cwd = makeTempDir();
+  initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "app.js"), "console.log('v1');\n");
+  fs.writeFileSync(path.join(cwd, "résumé.md"), "# tracked\n");
+  run("git", ["add", "app.js", "résumé.md"], { cwd });
+  run("git", ["commit", "-m", "init"], { cwd });
+  fs.writeFileSync(path.join(cwd, "résumé.md"), "# tracked, edited\n");
+  fs.writeFileSync(path.join(cwd, "café.txt"), "untracked body\n");
+
+  const target = resolveReviewTarget(cwd, {});
+  const context = collectReviewContext(cwd, target);
+
+  assert.equal(target.mode, "working-tree");
+  assert.deepEqual(context.changedFiles, ["café.txt", "résumé.md"]);
+  assert.match(context.content, /### café\.txt\n```\nuntracked body\n```/);
+  assert.doesNotMatch(context.content, /\\303|broken symlink/);
+  assert.match(context.content, /^M résumé\.md$/m);
+});
+
+test("branch changed files with non-ASCII names are listed unquoted", () => {
+  const cwd = makeTempDir();
+  initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "app.js"), "console.log('v1');\n");
+  run("git", ["add", "app.js"], { cwd });
+  run("git", ["commit", "-m", "init"], { cwd });
+  run("git", ["checkout", "-b", "feature/test"], { cwd });
+  fs.writeFileSync(path.join(cwd, "naïve.js"), "export const x = 1;\n");
+  run("git", ["add", "naïve.js"], { cwd });
+  run("git", ["commit", "-m", "add"], { cwd });
+
+  const target = resolveReviewTarget(cwd, {});
+  const context = collectReviewContext(cwd, target, { includeDiff: false });
+
+  assert.equal(target.mode, "branch");
+  assert.deepEqual(context.changedFiles, ["naïve.js"]);
+  assert.equal(context.fileCount, 1);
+  assert.match(context.content, /## Changed Files\n\nnaïve\.js/);
+});

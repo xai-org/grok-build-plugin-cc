@@ -255,6 +255,63 @@ test("run delegates through fake grok and stores a finished job", () => {
   }
 });
 
+test("run marks a silent grok process as stalled and records the partial output", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir, "hang-print");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "run", "--json", "--idle-timeout-ms", "1500", "finish then hang"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0, "a stalled run must not report success");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.stalled, true);
+  assert.match(payload.rawOutput, /Partial answer before the hook held the process/);
+
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const jobs = listJobs(repo);
+    assert.ok(jobs.length >= 1);
+    assert.equal(jobs[0].status, "failed");
+    assert.equal(jobs[0].phase, "stalled");
+    const stored = readStoredJobFromDisk(repo, jobs[0].id);
+    assert.ok(stored, "job file should exist");
+    assert.equal(stored.result?.stalled, true);
+    assert.match(stored.rendered ?? "", /produced no output for 2s while its process was still alive/);
+    assert.match(stored.rendered ?? "", /Partial answer before the hook held the process/);
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("run rejects a negative --idle-timeout-ms", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "run", "--idle-timeout-ms", "-1", "anything"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}${result.stdout}`, /--idle-timeout-ms/);
+});
+
 test("runs and show surface the latest finished run", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -287,6 +344,80 @@ test("runs and show surface the latest finished run", () => {
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Handled the requested task|Grok session ID|Run:/);
+});
+
+function writeRunningJob(repo, pluginDataDir, summary) {
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const jobId = generateJobId("run");
+    const jobsDir = path.join(resolveStateDir(repo), "jobs");
+    fs.mkdirSync(jobsDir, { recursive: true });
+    const logFile = path.join(jobsDir, `${jobId}.log`);
+    fs.writeFileSync(logFile, "", "utf8");
+    const job = {
+      id: jobId,
+      kind: "task",
+      kindLabel: "delegate",
+      title: "Grok Build Delegate",
+      workspaceRoot: repo,
+      jobClass: "task",
+      summary,
+      status: "running",
+      phase: "running",
+      logFile,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    writeJobFile(repo, jobId, job);
+    upsertJob(repo, job);
+    return jobId;
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+}
+
+test("runs --wait --timeout-ms 0 checks once instead of waiting the default four minutes", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+  const jobId = writeRunningJob(repo, pluginDataDir, "still running");
+
+  const startedAt = Date.now();
+  const result = run("node", [SCRIPT, "runs", jobId, "--wait", "--timeout-ms", "0", "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.timeoutMs, 0);
+  assert.equal(payload.waitTimedOut, true);
+  assert.ok(elapsedMs < 10_000, `--timeout-ms 0 took ${elapsedMs}ms`);
+});
+
+test("runs --wait rejects a non-numeric --timeout-ms instead of using the default", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  installFakeGrok(binDir);
+  initGitRepo(repo);
+  const jobId = writeRunningJob(repo, pluginDataDir, "still running");
+
+  const result = run("node", [SCRIPT, "runs", jobId, "--wait", "--timeout-ms", "soon"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}${result.stdout}`, /--timeout-ms must be a non-negative number/);
 });
 
 function processAlive(pid) {
@@ -440,6 +571,68 @@ test("enqueueBackgroundJob writes the job file before spawning the worker", asyn
     assert.equal(result.payload.bridgePid, 424242);
     const jobs = listJobs(repo);
     assert.equal(jobs[0].pid, 424242);
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("enqueueBackgroundJob keeps a worker's running state and agentPid when the worker starts first", async () => {
+  const { enqueueBackgroundJob } = await import("../plugins/grok-build/scripts/grok-bridge.mjs");
+  const { patchJobIfActive } = await import("../plugins/grok-build/scripts/lib/state.mjs");
+  const repo = makeTempDir();
+  const pluginDataDir = makeTempDir();
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+
+  try {
+    const job = {
+      id: generateJobId("run"),
+      kind: "task",
+      kindLabel: "delegate",
+      title: "Grok Build Delegate",
+      workspaceRoot: repo,
+      jobClass: "task",
+      summary: "bg race",
+      write: false
+    };
+
+    const result = enqueueBackgroundJob(
+      repo,
+      job,
+      { kind: "task", cwd: repo, prompt: "hello", write: false, resumeLast: false, jobId: job.id },
+      {
+        spawnWorker(cwd, jobId) {
+          // The worker won the state lock before the parent recorded its pid: runTrackedJob
+          // marked the job running and the first progress event reported the grok pid.
+          patchJobIfActive(repo, jobId, {
+            status: "running",
+            startedAt: new Date().toISOString(),
+            phase: "starting",
+            bridgePid: 424242,
+            pid: 424242,
+            agentPid: null
+          });
+          patchJobIfActive(repo, jobId, { phase: "running", agentPid: 515151, threadId: "thread-race" });
+          return { pid: 424242 };
+        }
+      }
+    );
+
+    assert.equal(result.payload.pid, 424242);
+    const stored = readStoredJobFromDisk(repo, job.id);
+    assert.equal(stored.status, "running");
+    assert.equal(stored.phase, "running");
+    assert.equal(stored.agentPid, 515151);
+    assert.equal(stored.threadId, "thread-race");
+    assert.equal(stored.pid, 424242);
+    assert.equal(stored.bridgePid, 424242);
+    const indexed = listJobs(repo).find((entry) => entry.id === job.id);
+    assert.equal(indexed.status, "running");
+    assert.equal(indexed.agentPid, 515151);
   } finally {
     if (previous == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;

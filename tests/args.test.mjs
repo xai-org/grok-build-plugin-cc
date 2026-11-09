@@ -42,3 +42,19 @@ test("parseArgs can warn on unknown long options without treating them as positi
   assert.deepEqual(result.positionals, ["working-tree", "focus text"]);
   assert.equal(result.options.scope, undefined);
 });
+
+test("parseArgs keeps '=' inside an inline --key=value", () => {
+  const result = parseArgs(["--cwd=/srv/app=prod", "--json=false", "rest"], {
+    valueOptions: ["cwd"],
+    booleanOptions: ["json"]
+  });
+  assert.equal(result.options.cwd, "/srv/app=prod");
+  assert.equal(result.options.json, false);
+  assert.deepEqual(result.positionals, ["rest"]);
+});
+
+test("splitRawArgumentString keeps an empty quoted argument as a token", () => {
+  assert.deepEqual(splitRawArgumentString(`--base "" focus`), ["--base", "", "focus"]);
+  assert.deepEqual(splitRawArgumentString(`''`), [""]);
+  assert.deepEqual(splitRawArgumentString(`a   b`), ["a", "b"]);
+});

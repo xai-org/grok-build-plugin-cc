@@ -239,7 +239,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       bridgePid,
       agentPid: null,
       pid: null,
-      phase: completionStatus === "completed" ? "done" : "failed",
+      phase: completionStatus === "completed" ? "done" : execution.stalled ? "stalled" : "failed",
       logFile: options.logFile ?? job.logFile ?? null
     });
 

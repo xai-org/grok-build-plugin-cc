@@ -1,17 +1,59 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
 
 import { readJsonFile } from "./fs.mjs";
-import { binaryAvailable, runCommand } from "./process.mjs";
+import { binaryAvailable, runCommand, terminateProcessTree } from "./process.mjs";
 
 export const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 
 const DEFAULT_BINARY = "grok";
 const BINARY_ENV = "GROK_BINARY";
+
+// A headless run whose grok process stays alive without producing output is
+// treated as stalled once this much time passes. The usual cause is a Stop,
+// SubagentStop, or notification hook in the user's interactive profile that
+// waits for a person; Grok only exits (and only prints its `end` marker) after
+// that hook releases, so watching process exit alone can leave a finished run
+// `running` for as long as the hook's own timeout (#45).
+export const IDLE_TIMEOUT_ENV = "GROK_BUILD_IDLE_TIMEOUT_MS";
+export const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+// `terminateProcessTree` waits synchronously for this long between SIGTERM and SIGKILL.
+const STALL_KILL_GRACE_MS = 500;
+
+/**
+ * Resolve the idle timeout for a headless run. Explicit option wins, then the
+ * environment variable, then the default. `0`, negative, or unparsable values
+ * disable the watchdog.
+ */
+export function resolveIdleTimeoutMs(value, env = process.env) {
+  const candidates = [value, env?.[IDLE_TIMEOUT_ENV]];
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === "") {
+      continue;
+    }
+    const parsed = Number(candidate);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return parsed > 0 ? Math.floor(parsed) : 0;
+  }
+  return DEFAULT_IDLE_TIMEOUT_MS;
+}
+
+export function formatIdleDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
 
 export function resolveGrokBinary(env = process.env) {
   const override = env?.[BINARY_ENV];
@@ -163,7 +205,11 @@ function buildHeadlessArgs(prompt, options = {}) {
     args.push("--session-id", options.sessionId);
   }
 
-  args.push("-p", prompt);
+  if (options.promptFile) {
+    args.push("--prompt-file", options.promptFile);
+  } else {
+    args.push("-p", prompt);
+  }
 
   if (options.cwd) {
     args.push("--cwd", options.cwd);
@@ -211,14 +257,21 @@ export function runHeadlessAgent(cwd, options = {}) {
     ? options.resumeSessionId
     : options.sessionId || (options.assignSessionId === false ? null : crypto.randomUUID());
 
+  const promptFile = options.promptFile
+    ? null
+    : promptNeedsFile(prompt, options.platform ?? process.platform)
+      ? writePromptFile(prompt)
+      : null;
   const args = buildHeadlessArgs(prompt, {
     ...options,
     cwd: options.cwd ?? cwd,
-    sessionId: options.resumeSessionId || options.continueLast ? undefined : sessionId
+    sessionId: options.resumeSessionId || options.continueLast ? undefined : sessionId,
+    promptFile: options.promptFile ?? promptFile?.file
   });
 
   const platform = options.platform ?? process.platform;
   const detached = options.detached ?? platform !== "win32";
+  const idleTimeoutMs = resolveIdleTimeoutMs(options.idleTimeoutMs, options.env ?? process.env);
 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
@@ -238,28 +291,80 @@ export function runHeadlessAgent(cwd, options = {}) {
 
     let stdout = "";
     let stderr = "";
+    let stalled = false;
+    let idleTimer = null;
+
+    const clearIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    const onIdle = () => {
+      idleTimer = null;
+      if (stalled || child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      stalled = true;
+      emitProgress(
+        options.onProgress,
+        `Grok produced no output for ${formatIdleDuration(idleTimeoutMs)}; terminating the run as stalled.`,
+        "stalled",
+        { threadId: sessionId, agentPid }
+      );
+      if (agentPid) {
+        try {
+          terminateProcessTree(agentPid, { platform, graceMs: STALL_KILL_GRACE_MS });
+        } catch {
+          // The close handler still runs if the kill fails; fall back to the child handle.
+          child.kill("SIGKILL");
+        }
+      } else {
+        child.kill("SIGKILL");
+      }
+    };
+
+    const armIdleTimer = () => {
+      if (idleTimeoutMs <= 0 || stalled) {
+        return;
+      }
+      clearIdleTimer();
+      idleTimer = setTimeout(onIdle, idleTimeoutMs);
+      if (typeof idleTimer.unref === "function") {
+        idleTimer.unref();
+      }
+    };
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
+      armIdleTimer();
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
+      armIdleTimer();
     });
 
     child.on("error", (error) => {
+      clearIdleTimer();
+      promptFile?.cleanup();
       reject(error);
     });
 
     child.on("close", (code, signal) => {
-      const status = code ?? (signal ? 1 : 0);
-      emitProgress(
-        options.onProgress,
-        status === 0 ? "Grok finished." : `Grok exited with status ${status}.`,
-        status === 0 ? "finalizing" : "failed",
-        { threadId: sessionId, agentPid }
-      );
+      clearIdleTimer();
+      promptFile?.cleanup();
+      const status = stalled ? (code && code !== 0 ? code : 1) : (code ?? (signal ? 1 : 0));
+      if (!stalled) {
+        emitProgress(
+          options.onProgress,
+          status === 0 ? "Grok finished." : `Grok exited with status ${status}.`,
+          status === 0 ? "finalizing" : "failed",
+          { threadId: sessionId, agentPid }
+        );
+      }
       resolve({
         status,
         signal,
@@ -269,10 +374,14 @@ export function runHeadlessAgent(cwd, options = {}) {
         threadId: sessionId,
         agentPid,
         finalMessage: stdout.trimEnd(),
+        stalled,
+        idleTimeoutMs,
         args,
         binary
       });
     });
+
+    armIdleTimer();
   });
 }
 
@@ -369,22 +478,26 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
   } catch {
   }
 
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) {
+  // Try every fenced block, JSON-tagged ones first, so a shell or diff fence
+  // earlier in the message does not shadow the JSON block that follows it.
+  const fences = [];
+  for (const match of text.matchAll(/```([\w+-]*)[ \t]*\n?([\s\S]*?)```/g)) {
+    const tag = match[1].toLowerCase();
+    fences.push({ tag, body: match[2].trim(), rank: tag === "json" ? 0 : tag === "" ? 1 : 2 });
+  }
+  fences.sort((left, right) => left.rank - right.rank);
+
+  let firstError = null;
+  for (const fence of fences) {
     try {
       return {
         ...fallback,
-        parsed: JSON.parse(fenced[1].trim()),
+        parsed: JSON.parse(fence.body),
         parseError: null,
         rawOutput: text
       };
     } catch (error) {
-      return {
-        ...fallback,
-        parsed: null,
-        parseError: error.message,
-        rawOutput: text
-      };
+      firstError ??= error;
     }
   }
 
@@ -399,19 +512,14 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
         rawOutput: text
       };
     } catch (error) {
-      return {
-        ...fallback,
-        parsed: null,
-        parseError: error.message,
-        rawOutput: text
-      };
+      firstError ??= error;
     }
   }
 
   return {
     ...fallback,
     parsed: null,
-    parseError: "Could not parse structured JSON from Grok output.",
+    parseError: firstError ? firstError.message : "Could not parse structured JSON from Grok output.",
     rawOutput: text
   };
 }
@@ -449,4 +557,26 @@ export function buildReviewPrompt({ targetLabel, focusText, collectionGuidance, 
     schemaInstructions ? `\n${schemaInstructions}` : ""
   ];
   return parts.filter((line) => line !== undefined).join("\n");
+}
+
+/**
+ * The most prompt that goes on the command line as `-p <prompt>`. Linux caps one argv string at 128 KiB
+ * (MAX_ARG_STRLEN) and Windows the whole command line at 32,767 characters; a review or critique prompt that
+ * inlines a diff or untracked files passes both and the spawn fails with E2BIG / ENAMETOOLONG before grok
+ * starts. Above this, or when the prompt starts with "-" (which the CLI's parser reads as a flag), the prompt
+ * is written to a file and passed with `--prompt-file`, which also keeps it out of process listings.
+ */
+export function promptArgvLimitBytes(platform = process.platform) {
+  return platform === "win32" ? 16 * 1024 : 64 * 1024;
+}
+
+export function promptNeedsFile(prompt, platform = process.platform) {
+  return prompt.startsWith("-") || Buffer.byteLength(prompt, "utf8") > promptArgvLimitBytes(platform);
+}
+
+function writePromptFile(prompt) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grok-cc-prompt-"));
+  const file = path.join(dir, "prompt.md");
+  fs.writeFileSync(file, prompt, "utf8");
+  return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
