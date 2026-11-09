@@ -10,6 +10,7 @@ import { resolveJobKillTargets, SESSION_ID_ENV } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+const GROK_PLUGIN_DATA_ENV = "GROK_BUILD_PLUGIN_DATA";
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -81,7 +82,10 @@ function cleanupSessionJobs(cwd, sessionId) {
 function handleSessionStart(input) {
   appendEnvVar(SESSION_ID_ENV, input.session_id);
   appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
-  appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
+  // Export under a plugin-owned name. Re-exporting CLAUDE_PLUGIN_DATA itself
+  // makes every Bash-run script in the session (ours and other plugins') see
+  // whichever plugin's SessionStart hook ran last (#49, #17).
+  appendEnvVar(GROK_PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
 }
 
 async function handleSessionEnd(input) {

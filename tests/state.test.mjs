@@ -23,6 +23,28 @@ test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   assert.match(stateDir, /grok-cc-runs/);
 });
 
+test("resolveStateDir prefers GROK_BUILD_PLUGIN_DATA over CLAUDE_PLUGIN_DATA", () => {
+  const workspace = makeTempDir();
+  const ownDir = makeTempDir();
+  const siblingDir = makeTempDir();
+  const previousOwn = process.env.GROK_BUILD_PLUGIN_DATA;
+  const previousGeneric = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.GROK_BUILD_PLUGIN_DATA = ownDir;
+  // A sibling plugin's SessionStart hook exported the generic name last.
+  process.env.CLAUDE_PLUGIN_DATA = siblingDir;
+
+  try {
+    const stateDir = resolveStateDir(workspace);
+    assert.equal(stateDir.startsWith(path.join(ownDir, "state")), true);
+    assert.equal(stateDir.startsWith(siblingDir), false);
+  } finally {
+    if (previousOwn == null) delete process.env.GROK_BUILD_PLUGIN_DATA;
+    else process.env.GROK_BUILD_PLUGIN_DATA = previousOwn;
+    if (previousGeneric == null) delete process.env.CLAUDE_PLUGIN_DATA;
+    else process.env.CLAUDE_PLUGIN_DATA = previousGeneric;
+  }
+});
+
 test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
   const workspace = makeTempDir();
   const pluginDataDir = makeTempDir();

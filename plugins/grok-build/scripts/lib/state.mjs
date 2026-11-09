@@ -6,7 +6,17 @@ import path from "node:path";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 const STATE_VERSION = 1;
+// Plugin-owned name first: Claude Code sets CLAUDE_PLUGIN_DATA only for hook
+// processes, and every plugin's SessionStart hook that re-exports the generic
+// name into CLAUDE_ENV_FILE races the others (last writer wins). The hook
+// exports GROK_BUILD_PLUGIN_DATA instead; the generic name stays as a fallback
+// for hook processes and for older sessions.
+const GROK_PLUGIN_DATA_ENV = "GROK_BUILD_PLUGIN_DATA";
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
+
+export function resolvePluginDataDir(env = process.env) {
+  return env[GROK_PLUGIN_DATA_ENV] || env[PLUGIN_DATA_ENV] || null;
+}
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "grok-cc-runs");
 const STATE_FILE_NAME = "state.json";
 const LOCK_FILE_NAME = "state.json.lock";
@@ -58,7 +68,7 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  const pluginDataDir = resolvePluginDataDir();
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
   return path.join(stateRoot, `${slug}-${hash}`);
 }

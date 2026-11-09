@@ -161,11 +161,12 @@ Kills every distinct pid among `agentPid` (detached grok child) and `bridgePid` 
 | `GROK_CC_SESSION_ID` | Claude session id (set by SessionStart hook) |
 | `GROK_CC_TRANSCRIPT_PATH` | Claude transcript path (set by SessionStart hook) |
 | `CLAUDE_PLUGIN_ROOT` | Plugin install root (host) |
-| `CLAUDE_PLUGIN_DATA` | Plugin data root; state lives under `.../state` |
+| `GROK_BUILD_PLUGIN_DATA` | Plugin data root for Bash-run bridge commands (set by SessionStart hook from the host's `CLAUDE_PLUGIN_DATA`); state lives under `.../state` |
+| `CLAUDE_PLUGIN_DATA` | Plugin data root as the host sets it for hook processes; read when `GROK_BUILD_PLUGIN_DATA` is unset |
 | `CLAUDE_ENV_FILE` | Host env file for session hooks |
 | `CLAUDE_PROJECT_DIR` | Project directory from the host |
 
-State fallback when `CLAUDE_PLUGIN_DATA` is unset: `$TMPDIR/grok-cc-runs`.
+State fallback when neither data variable is set: `$TMPDIR/grok-cc-runs`.
 
 ## Development
 
