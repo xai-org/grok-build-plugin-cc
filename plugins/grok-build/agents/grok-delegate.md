@@ -19,8 +19,13 @@ Selection guidance:
 Forwarding rules:
 
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/grok-bridge.mjs" run ...`.
-- If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded delegate request.
-- If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep Grok running for a long time, prefer background execution and ensure the bridge call uses `--background`.
+- Run in the foreground by default. Do NOT add `--background` unless the user explicitly asked for a background run.
+  Foreground is the default even when the task looks complicated, open-ended, multi-step, or long-running: a run id is
+  not a result, and returning one lets a caller record work that never happened (fleet#254; fleet#34 is the same shape
+  in the sibling CLI bridge). Blocking on the result is the whole value of this subagent.
+- If — and only if — the user explicitly asked for `--background`, the first line of your reply must state that NO
+  RESULT IS AVAILABLE YET and that the run id is a pointer, not an outcome. Never present a queued-launch message as
+  though the task were finished.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, stop runs, summarize output, or do any follow-up work of your own.
 - Do not call `review`, `critique`, `runs`, `show`, or `stop`. This subagent only forwards to `run`.
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
@@ -34,7 +39,11 @@ Forwarding rules:
 - Otherwise forward the task as a fresh `run`.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Return the stdout of the `grok-bridge` command exactly as-is.
-- If the Bash call fails or Grok cannot be invoked, return nothing.
+- The bridge exits 3 when it detects an empty run (the delegate described the task instead of doing it). If the Bash
+  call exits non-zero, or stdout carries an `EMPTY RUN` or `UNVERIFIED RUN` banner, return that stdout AND state
+  plainly on the first line that the delegate run FAILED and produced no usable result. Never summarise it away.
+- If the Bash call fails or Grok cannot be invoked, report the failure and the error text. Do not return nothing:
+  silence is indistinguishable from success to the caller.
 
 Response style:
 

@@ -229,17 +229,38 @@ export async function runTrackedJob(job, runner, options = {}) {
 
   try {
     const execution = await runner();
-    const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
+
+    // fleet#254: a zero exit code reports process health, not work completion. A run whose model
+    // emitted a plan and ended its turn exits 0 exactly like a run that did the job. Demote such
+    // a run to `failed` so no caller can read `completed` as evidence of work.
+    const workVerdict = execution.workVerdict ?? null;
+    const emptyRun = Boolean(workVerdict?.noWork);
+    const completionStatus = execution.exitStatus === 0 && !emptyRun ? "completed" : "failed";
+    if (emptyRun) {
+      appendLogLine(
+        options.logFile ?? job.logFile ?? null,
+        `EMPTY RUN: marking ${job.id} FAILED despite exit ${execution.exitStatus}. ${(workVerdict.reasons ?? []).join(" ")}`
+      );
+    } else if (workVerdict?.unverified) {
+      appendLogLine(
+        options.logFile ?? job.logFile ?? null,
+        `UNVERIFIED RUN: ${job.id} produced no work telemetry; completion is not evidence of work.`
+      );
+    }
+
     const claim = claimJobTerminal(job.workspaceRoot, job.id, completionStatus, {
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
       summary: execution.summary,
       result: execution.payload,
       rendered: execution.rendered,
+      workEvidence: workVerdict?.evidence ?? null,
+      emptyRun,
       bridgePid,
       agentPid: null,
       pid: null,
       phase: completionStatus === "completed" ? "done" : "failed",
+      errorMessage: emptyRun ? (workVerdict.reasons ?? []).join(" ") : undefined,
       logFile: options.logFile ?? job.logFile ?? null
     });
 

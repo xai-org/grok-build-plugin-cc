@@ -6,6 +6,7 @@ import process from "node:process";
 
 import { readJsonFile } from "./fs.mjs";
 import { binaryAvailable, runCommand } from "./process.mjs";
+import { extractRunTelemetry } from "./work-evidence.mjs";
 
 export const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
@@ -260,6 +261,10 @@ export function runHeadlessAgent(cwd, options = {}) {
         status === 0 ? "finalizing" : "failed",
         { threadId: sessionId, agentPid }
       );
+      // fleet#254: recover run telemetry (num_turns / stopReason / usage) when the caller asked
+      // for a structured output format. Telemetry is null for plain runs, and a null telemetry
+      // must never be read as "the run did work".
+      const { text: finalMessage, telemetry } = extractRunTelemetry(stdout);
       resolve({
         status,
         signal,
@@ -268,7 +273,8 @@ export function runHeadlessAgent(cwd, options = {}) {
         sessionId,
         threadId: sessionId,
         agentPid,
-        finalMessage: stdout.trimEnd(),
+        finalMessage,
+        telemetry,
         args,
         binary
       });
