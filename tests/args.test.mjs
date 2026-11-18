@@ -42,3 +42,24 @@ test("parseArgs can warn on unknown long options without treating them as positi
   assert.deepEqual(result.positionals, ["working-tree", "focus text"]);
   assert.equal(result.options.scope, undefined);
 });
+
+test("parseArgs keeps the full inline value when it contains '='", () => {
+  const result = parseArgs(["--base=feature=exp", "--url=https://x/?a=b&c=d"], {
+    valueOptions: ["base", "url"]
+  });
+  assert.equal(result.options.base, "feature=exp");
+  assert.equal(result.options.url, "https://x/?a=b&c=d");
+});
+
+test("parseArgs still handles a plain and an empty inline value", () => {
+  const result = parseArgs(["--base=main", "--note="], {
+    valueOptions: ["base", "note"]
+  });
+  assert.equal(result.options.base, "main");
+  assert.equal(result.options.note, "");
+});
+
+test("splitRawArgumentString keeps an explicitly-quoted empty argument", () => {
+  assert.deepEqual(splitRawArgumentString(`send ""`), ["send", ""]);
+  assert.deepEqual(splitRawArgumentString(`a "" b`), ["a", "", "b"]);
+});

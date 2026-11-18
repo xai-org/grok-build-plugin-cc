@@ -27,7 +27,10 @@ export function parseArgs(argv, config = {}) {
     }
 
     if (token.startsWith("--")) {
-      const [rawKey, inlineValue] = token.slice(2).split("=", 2);
+      const body = token.slice(2);
+      const eqIndex = body.indexOf("=");
+      const rawKey = eqIndex === -1 ? body : body.slice(0, eqIndex);
+      const inlineValue = eqIndex === -1 ? undefined : body.slice(eqIndex + 1);
       const key = aliasMap[rawKey] ?? rawKey;
 
       if (booleanOptions.has(key)) {
@@ -92,18 +95,23 @@ export function parseArgs(argv, config = {}) {
 export function splitRawArgumentString(raw) {
   const tokens = [];
   let current = "";
+  // Track whether a token has been started so an explicitly-quoted empty argument ("") is kept
+  // rather than dropped because `current` is still the empty string.
+  let started = false;
   let quote = null;
   let escaping = false;
 
   for (const character of raw) {
     if (escaping) {
       current += character;
+      started = true;
       escaping = false;
       continue;
     }
 
     if (character === "\\") {
       escaping = true;
+      started = true;
       continue;
     }
 
@@ -118,25 +126,29 @@ export function splitRawArgumentString(raw) {
 
     if (character === "'" || character === "\"") {
       quote = character;
+      started = true;
       continue;
     }
 
     if (/\s/.test(character)) {
-      if (current) {
+      if (started) {
         tokens.push(current);
         current = "";
+        started = false;
       }
       continue;
     }
 
     current += character;
+    started = true;
   }
 
   if (escaping) {
     current += "\\";
+    started = true;
   }
 
-  if (current) {
+  if (started) {
     tokens.push(current);
   }
 
