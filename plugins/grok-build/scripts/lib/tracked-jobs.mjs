@@ -21,7 +21,8 @@ export function nowIso() {
 function normalizeProgressEvent(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const agentPidRaw = value.agentPid ?? null;
-    const agentPid = Number.isFinite(Number(agentPidRaw)) ? Number(agentPidRaw) : null;
+    const agentPid =
+    agentPidRaw != null && Number.isFinite(Number(agentPidRaw)) ? Number(agentPidRaw) : null;
     return {
       message: String(value.message ?? "").trim(),
       phase: typeof value.phase === "string" && value.phase.trim() ? value.phase.trim() : null,
