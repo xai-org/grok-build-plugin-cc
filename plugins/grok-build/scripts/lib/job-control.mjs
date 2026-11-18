@@ -215,7 +215,11 @@ function matchJobReference(jobs, reference, predicate = () => true) {
     throw new Error(`Run reference "${reference}" is ambiguous. Use a longer run id.`);
   }
 
-  throw new Error(`No run found for "${reference}". Run /grok-build:runs to list known runs.`);
+  return null;
+}
+
+function noRunFoundError(reference) {
+  return new Error(`No run found for "${reference}". Run /grok-build:runs to list known runs.`);
 }
 
 export function buildStatusSnapshot(cwd, options = {}) {
@@ -251,7 +255,7 @@ export function buildSingleJobSnapshot(cwd, reference, options = {}) {
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const selected = matchJobReference(jobs, reference);
   if (!selected) {
-    throw new Error(`No run found for "${reference}". Run /grok-build:runs to inspect known runs.`);
+    throw noRunFoundError(reference);
   }
 
   return {
@@ -279,6 +283,9 @@ export function resolveResultJob(cwd, reference) {
   }
 
   if (reference) {
+    if (!matchJobReference(jobs, reference)) {
+      throw noRunFoundError(reference);
+    }
     throw new Error(`No finished run found for "${reference}". Run /grok-build:runs to inspect active runs.`);
   }
 
@@ -292,10 +299,14 @@ export function resolveCancelableJob(cwd, reference, options = {}) {
 
   if (reference) {
     const selected = matchJobReference(activeJobs, reference);
-    if (!selected) {
-      throw new Error(`No active run found for "${reference}".`);
+    if (selected) {
+      return { workspaceRoot, job: selected };
     }
-    return { workspaceRoot, job: selected };
+    const finished = matchJobReference(jobs, reference);
+    if (finished) {
+      throw new Error(`Run ${finished.id} is already ${finished.status}. There is nothing to stop.`);
+    }
+    throw noRunFoundError(reference);
   }
 
   const sessionScopedActiveJobs = filterJobsForCurrentSession(activeJobs, options);
