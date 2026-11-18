@@ -369,22 +369,18 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
   } catch {
   }
 
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) {
+  // Try each fenced block; a non-JSON fence (e.g. a reasoning/plan/code block) must not abort the
+  // chain — fall through to the brace-slice fallback so trailing/embedded JSON is still recovered.
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
     try {
       return {
         ...fallback,
-        parsed: JSON.parse(fenced[1].trim()),
+        parsed: JSON.parse(match[1].trim()),
         parseError: null,
         rawOutput: text
       };
-    } catch (error) {
-      return {
-        ...fallback,
-        parsed: null,
-        parseError: error.message,
-        rawOutput: text
-      };
+    } catch {
+      // not this fence; keep looking, then try the brace slice below
     }
   }
 

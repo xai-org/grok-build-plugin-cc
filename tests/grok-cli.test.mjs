@@ -160,3 +160,23 @@ test("live grok --help advertises headless flags when grok is on PATH", () => {
     assert.match(text, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });
+
+test("parseStructuredOutput recovers JSON that follows a non-JSON fenced block", () => {
+  const raw = [
+    "Plan:",
+    "```text",
+    "inspect auth.js",
+    "```",
+    '{"verdict":"approve","summary":"ok","findings":[],"next_steps":[]}'
+  ].join("\n");
+  const result = parseStructuredOutput(raw);
+  assert.equal(result.parseError, null);
+  assert.equal(result.parsed.verdict, "approve");
+});
+
+test("parseStructuredOutput reads JSON from a later fenced block", () => {
+  const raw = ["```text", "notes", "```", "```json", '{"verdict":"reject"}', "```"].join("\n");
+  const result = parseStructuredOutput(raw);
+  assert.equal(result.parseError, null);
+  assert.equal(result.parsed.verdict, "reject");
+});
