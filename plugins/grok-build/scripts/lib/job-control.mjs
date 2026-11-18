@@ -232,9 +232,14 @@ export function buildStatusSnapshot(cwd, options = {}) {
   const latestFinishedRaw = jobs.find((job) => job.status !== "queued" && job.status !== "running") ?? null;
   const latestFinished = latestFinishedRaw ? enrichJob(latestFinishedRaw, { maxProgressLines }) : null;
 
-  const recent = (options.all ? jobs : jobs.slice(0, maxJobs))
-    .filter((job) => job.status !== "queued" && job.status !== "running" && job.id !== latestFinished?.id)
-    .map((job) => enrichJob(job, { maxProgressLines }));
+  // Filter to finished-and-not-latestFinished BEFORE slicing: running/queued jobs sort newest-first,
+  // so slicing the full list first lets active jobs consume the window and hides finished runs.
+  const finished = jobs.filter(
+    (job) => job.status !== "queued" && job.status !== "running" && job.id !== latestFinished?.id,
+  );
+  const recent = (options.all ? finished : finished.slice(0, maxJobs)).map((job) =>
+    enrichJob(job, { maxProgressLines }),
+  );
 
   return {
     workspaceRoot,
