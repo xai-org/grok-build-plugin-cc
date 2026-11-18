@@ -27,7 +27,12 @@ export function parseArgs(argv, config = {}) {
     }
 
     if (token.startsWith("--")) {
-      const [rawKey, inlineValue] = token.slice(2).split("=", 2);
+      // Split on the first "=" only, so a value that itself contains "="
+      // (a path, a query string, a key=value prompt) is kept whole.
+      const body = token.slice(2);
+      const equals = body.indexOf("=");
+      const rawKey = equals === -1 ? body : body.slice(0, equals);
+      const inlineValue = equals === -1 ? undefined : body.slice(equals + 1);
       const key = aliasMap[rawKey] ?? rawKey;
 
       if (booleanOptions.has(key)) {
@@ -94,6 +99,8 @@ export function splitRawArgumentString(raw) {
   let current = "";
   let quote = null;
   let escaping = false;
+  // A quoted span yields a token even when it is empty ("" or ''), as a shell would.
+  let quoted = false;
 
   for (const character of raw) {
     if (escaping) {
@@ -118,13 +125,15 @@ export function splitRawArgumentString(raw) {
 
     if (character === "'" || character === "\"") {
       quote = character;
+      quoted = true;
       continue;
     }
 
     if (/\s/.test(character)) {
-      if (current) {
+      if (current || quoted) {
         tokens.push(current);
         current = "";
+        quoted = false;
       }
       continue;
     }
@@ -136,7 +145,7 @@ export function splitRawArgumentString(raw) {
     current += "\\";
   }
 
-  if (current) {
+  if (current || quoted) {
     tokens.push(current);
   }
 
