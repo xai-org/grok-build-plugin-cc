@@ -260,9 +260,28 @@ function findLatestResumableTaskJob(jobs) {
   );
 }
 
+// `undefined` means "use the default". Anything else must be a finite,
+// non-negative number of milliseconds: `0` is a real value (check once, do
+// not wait), and a typo must fail instead of silently becoming the default.
+function parseDurationOption(name, raw, defaultMs, minimumMs = 0) {
+  if (raw === undefined || raw === null || raw === "") {
+    return defaultMs;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`--${name} must be a non-negative number of milliseconds, got ${JSON.stringify(String(raw))}.`);
+  }
+  return Math.max(minimumMs, Math.floor(parsed));
+}
+
 async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
-  const timeoutMs = Math.max(0, Number(options.timeoutMs) || DEFAULT_STATUS_WAIT_TIMEOUT_MS);
-  const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || DEFAULT_STATUS_POLL_INTERVAL_MS);
+  const timeoutMs = parseDurationOption("timeout-ms", options.timeoutMs, DEFAULT_STATUS_WAIT_TIMEOUT_MS);
+  const pollIntervalMs = parseDurationOption(
+    "poll-interval-ms",
+    options.pollIntervalMs,
+    DEFAULT_STATUS_POLL_INTERVAL_MS,
+    100
+  );
   const deadline = Date.now() + timeoutMs;
   let snapshot = buildSingleJobSnapshot(cwd, reference);
 
